@@ -70,9 +70,9 @@ fn main() {
     // test-por/test-interhost/logs/benchmark — обрабатываются в cli::run.
     // Всё остальное (или `serve`) — запуск демона; позиционный аргумент —
     // путь к файлу хранилища redb (по умолчанию ~/.nexxus/store.redb).
-    const CLI_CMDS: [&str; 12] = [
+    const CLI_CMDS: [&str; 13] = [
         "init", "id", "status", "peers", "peer", "upload", "download",
-        "test-por", "test-interhost", "logs", "benchmark", "update",
+        "test-por", "test-interhost", "logs", "benchmark", "update", "light",
     ];
     let args: Vec<String> = env::args().skip(1).collect();
     if args

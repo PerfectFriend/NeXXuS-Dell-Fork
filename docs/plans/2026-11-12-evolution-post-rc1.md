@@ -124,7 +124,7 @@
 ### Фаза E6 — «Экосистема» (после стабильного E2–E3)
 
 - Публичный registry bootstrap-пиров ✅ DONE: signed list (ed25519, expiry, canonical JSON) — bootstrap.rs, node_bootstrap_set/get, tamper/expired → error, e2e 46/46
-- Light client / mobile viewer (WASM или Kotlin) для download-by-CID
+- Light client ✅ DONE (CLI): `nexxusd light status|chunks|peers|get <root-hex> <out>|pin <hash> [--api host:port] [--token-file path]` — без запуска демона, roundtrip проверен живьём; mobile viewer (Kotlin/WASM) — остался в плане
 - Плагины политик хранения (скрипт: «этот префикс только на onion-пирах»)
 - Formal verification критичных кусков (session nonce binding, vault KDF, anti-loop) — точечно, не весь daemon
 

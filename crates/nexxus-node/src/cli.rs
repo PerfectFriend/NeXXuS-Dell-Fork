@@ -83,6 +83,71 @@ pub async fn ws_call(method: &str, params: Value) -> Result<Value, String> {
     Err("connection closed before response".to_string())
 }
 
+/// E6 light client: тонкий CLI без запуска демона.
+/// Поддерживает --api host:port и --token-file path (иначе env/дефолты).
+async fn cmd_light(rest: &[String]) -> i32 {
+    // парсим флаги
+    let mut api: Option<String> = None;
+    let mut token_file: Option<String> = None;
+    let mut pos = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--api" => {
+                if let Some(v) = rest.get(i + 1) {
+                    api = Some(v.clone());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            "--token-file" => {
+                if let Some(v) = rest.get(i + 1) {
+                    token_file = Some(v.clone());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            other => {
+                pos.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    if let Some(a) = api {
+        env::set_var("NEXXUS_API_ADDR", a);
+    }
+    if let Some(t) = token_file {
+        env::set_var("NEXXUS_API_TOKEN_FILE", t);
+    }
+    match pos.first().map(|s| s.as_str()) {
+        Some("status") => print_result(ws_call("node_status", json!({})).await),
+        Some("chunks") => print_result(ws_call("node_chunks", json!({})).await),
+        Some("peers") => print_result(ws_call("node_peers", json!({})).await),
+        Some("get") => match (pos.get(1), pos.get(2)) {
+            (Some(root), Some(out)) => {
+                print_result(ws_call("node_download", json!({ "root": root, "out": out })).await)
+            }
+            _ => {
+                eprintln!("usage: nexxusd light get <root-hex> <out-file>");
+                2
+            }
+        },
+        Some("pin") => match pos.get(1) {
+            Some(h) => print_result(ws_call("node_chunk_pin", json!({ "hash": h })).await),
+            None => {
+                eprintln!("usage: nexxusd light pin <hash-hex>");
+                2
+            }
+        },
+        _ => {
+            eprintln!("usage: nexxusd light status | chunks | peers | get <root-hex> <out> | pin <hash>  [--api host:port] [--token-file path]");
+            2
+        }
+    }
+}
+
 fn print_result(r: Result<Value, String>) -> i32 {
     match r {
         Ok(v) => {
@@ -112,6 +177,10 @@ async fn async_main(args: Vec<String>) -> i32 {
         "init" => cmd_init(&rest),
         "id" => cmd_id(&rest).await,
         "status" => print_result(ws_call("node_status", json!({})).await),
+        // E6 light client: тонкий режим без демона — только WS к ноде.
+        // nexxusd light status | get <root-hex> <out> | pin <hash> | chunks
+        // api/token: --api host:port / --token-file path, либо NEXXUS_API_ADDR / NEXXUS_API_TOKEN_FILE
+        "light" => cmd_light(&rest).await,
         "peers" => print_result(ws_call("node_peers", json!({})).await),
         "peer" => match rest.first().map(|s| s.as_str()) {
             Some("add") => match rest.get(1) {

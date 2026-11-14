@@ -222,6 +222,8 @@ Ready-to-install distributions are available in `public/packages/`:
 | `nexxusd peers` | List all connected active mesh peers and RTT latencies | `nexxusd peers` |
 | `nexxusd peer add <IP:PORT>` | Connect to a remote peer and perform mutual handshake | `nexxusd peer add 192.168.1.50:3999` |
 | `nexxusd test-por` | Run local Proof-of-Retrievability audit benchmark (<3000 ms) | `nexxusd test-por` |
+| `nexxusd light status\|chunks\|peers` | Light client: статус ноды без запуска демона | `nexxusd light status --api 127.0.0.1:4010` |
+| `nexxusd light get <root-hex> <out>` | Light client: скачать файл по CID через API ноды | `nexxusd light get <root> out.bin` |
 | `nexxusd test-interhost <IP:PORT>` | Run full 6-phase P2P inter-host diagnostic validation | `nexxusd test-interhost 192.168.1.50:3999` |
 | `nexxusd upload <file>` | Slices local file into 16KB chunks, applies RS(4+2), and disperses | `nexxusd upload /path/to/archive.tar.gz` |
 | `nexxusd download <hash> <out>` | Fetches shards from swarm, recovers via RS, and decrypts | `nexxusd download <sha256> /tmp/restored.bin` |
