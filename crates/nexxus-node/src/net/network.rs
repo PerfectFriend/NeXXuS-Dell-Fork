@@ -142,6 +142,7 @@ pub struct Metrics {
     pub por_fail: AtomicU64,
     pub backup_ok: AtomicU64,
     pub backup_fail: AtomicU64,
+    pub peers_evicted: AtomicU64,
 }
 
 impl Metrics {
@@ -164,6 +165,7 @@ impl Metrics {
             "por_fail": self.por_fail.load(Ordering::Relaxed),
             "backup_ok": self.backup_ok.load(Ordering::Relaxed),
             "backup_fail": self.backup_fail.load(Ordering::Relaxed),
+            "peers_evicted": self.peers_evicted.load(Ordering::Relaxed),
         })
     }
 
@@ -215,6 +217,9 @@ pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// NET-03 limits: cap on announced peers kept in the routing table, and how
 /// long an established connection may stay silent before we drop it.
 pub const MAX_PEERS: usize = 64;
+/// RES-05: при полном столе пир с score ниже этого порога вытесняется
+/// из routing table (соединение не рвётся), чтобы освободить место новому.
+pub const EVICT_SCORE_THRESHOLD: u64 = 40;
 pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
 
 impl P2pNetwork {
@@ -800,17 +805,45 @@ impl P2pNetwork {
                     peer_key = Some(vk);
                     peer_nonce = Some(announce.session_nonce);
                     let their_id = NodeId(announce.node_id);
-                    // NET-03: peer cap — do not grow the routing table past
-                    // MAX_PEERS; reject the announce with 0x0009 and close.
+                    // NET-03 / RES-05: peer cap. If the table is full and the
+                    // announcer is unknown, evict the lowest-score known peer
+                    // when its score is below EVICT_SCORE_THRESHOLD; otherwise
+                    // reject with 0x0009. Existing connections are never torn
+                    // down by eviction — only the routing-table entry goes.
                     {
                         let mut routing = self.routing.lock().await;
                         let cap = self.max_peers.load(Ordering::Relaxed);
                         if !routing.contains(&their_id) && routing.len() >= cap {
-                            drop(routing);
-                            self.metrics.peers_rejected_full.fetch_add(1, Ordering::Relaxed);
-                            let err = ErrorResponse { code: 0x0009, message: "peer table full".into() };
-                            self.send_signed_frame(&mut stream, &our_nonce, Opcode::ErrorResponse, req_id, &err).await?;
-                            return Err(NexxusError::Io("peer table full".into()));
+                            let victim = {
+                                let scores = self.peer_scores.lock().unwrap();
+                                routing
+                                    .peers()
+                                    .into_iter()
+                                    .map(|p| {
+                                        let s = scores.get(&p.addr).map(|s| s.score()).unwrap_or(50);
+                                        (s, p)
+                                    })
+                                    .min_by_key(|(s, _)| *s)
+                            };
+                            let evicted = match victim {
+                                Some((s, p)) if s < EVICT_SCORE_THRESHOLD => {
+                                    routing.remove(&p.node_id);
+                                    crate::log_ev!("info", "peer.evicted",
+                                        "node_id" => hex::encode(p.node_id.0),
+                                        "score" => s,
+                                        "reason" => "table_full_low_score");
+                                    self.metrics.peers_evicted.fetch_add(1, Ordering::Relaxed);
+                                    true
+                                }
+                                _ => false,
+                            };
+                            if !evicted {
+                                drop(routing);
+                                self.metrics.peers_rejected_full.fetch_add(1, Ordering::Relaxed);
+                                let err = ErrorResponse { code: 0x0009, message: "peer table full".into() };
+                                self.send_signed_frame(&mut stream, &our_nonce, Opcode::ErrorResponse, req_id, &err).await?;
+                                return Err(NexxusError::Io("peer table full".into()));
+                            }
                         }
                         routing.insert(crate::net::routing::Peer {
                             node_id: their_id,
@@ -1174,6 +1207,41 @@ mod tests {
     /// Real SHA-256 of the payload — put_chunk verifies hash == SHA-256(data).
     fn h(data: &[u8]) -> ChunkHash {
         ChunkHash(sha2::Sha256::digest(data).into())
+    }
+
+    #[test]
+    fn routing_remove_drops_known_peer() {
+        use std::net::{IpAddr, Ipv4Addr};
+        let our = NodeId([0u8; 32]);
+        let mut r = crate::net::routing::RoutingTable::new(our);
+        let p = crate::net::routing::Peer {
+            node_id: NodeId([7u8; 32]),
+            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 4001),
+        };
+        r.insert(p.clone());
+        assert!(r.contains(&p.node_id));
+        assert!(r.remove(&p.node_id));
+        assert!(!r.contains(&p.node_id));
+        assert!(!r.remove(&p.node_id)); // повторный remove — false
+    }
+
+    #[test]
+    fn evict_picks_lowest_score_victim() {
+        // Логика выбора жертвы: минимальный score среди routing peers.
+        let addr_a: SocketAddr = "127.0.0.1:4001".parse().unwrap();
+        let addr_b: SocketAddr = "127.0.0.1:4002".parse().unwrap();
+        let dir = tempdir().unwrap();
+        let store = Arc::new(ChunkStore::open(dir.path().join("s.redb")).unwrap());
+        let net = P2pNetwork::new(NodeId([1u8; 32]), "127.0.0.1:0".parse().unwrap(), store);
+        net.note_peer_result(addr_a, false); // a: 0 success → score 0
+        net.note_peer_result(addr_a, false);
+        net.note_peer_result(addr_b, true);  // b: score 100
+        let scores = net.peer_scores.lock().unwrap();
+        let a_score = scores.get(&addr_a).map(|s| s.score()).unwrap_or(50);
+        let b_score = scores.get(&addr_b).map(|s| s.score()).unwrap_or(50);
+        assert!(a_score < EVICT_SCORE_THRESHOLD);
+        assert!(b_score >= EVICT_SCORE_THRESHOLD);
+        assert!(a_score < b_score); // victim = a
     }
 
     #[test]

@@ -52,7 +52,7 @@
 
 | Функция | Зачем | Заметки |
 |---------|--------|---------|
-| Reputation / soft-score пиров | RES-05: сейчас полный стол → reject новых | Балл за uptime, успешные PoR, возраст; eviction по score, не только «первый пришёл» |
+| Reputation / soft-score пиров | ✅ DONE: score (success/fail + EWMA RTT), eviction lowest-score при full table ниже порога 40, метрика peers_evicted, THREAT_MODEL обновлён | eviction не рвёт живые соединения |
 | Метрики Prometheus / JSON | Мониторинг без Telegram | `/metrics` только на localhost или по токену |
 | Structured logging | ✅ DONE: JSON-lines события (conn.accepted/rejected_ip, handshake.timeout, backup.ok/fail) через log_ev!, без секретов | остальной лог пока текстовый |
 | Connection quality hints | RTT per peer: node_ping_peer + EWMA rtt_ms в PeerScore, UI-кнопка Ping — ✅ DONE | loss — нет (нужен счётчик retransmit, отдельно) |

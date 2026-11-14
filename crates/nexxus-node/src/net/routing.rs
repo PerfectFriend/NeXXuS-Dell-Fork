@@ -107,6 +107,18 @@ impl RoutingTable {
         self.buckets.iter().flat_map(|b| b.iter().cloned()).collect()
     }
 
+    /// Remove a peer by node id. Returns true if it was present.
+    pub fn remove(&mut self, id: &NodeId) -> bool {
+        let idx = Self::bucket_index(id, &self.our_id);
+        let bucket = &mut self.buckets[idx];
+        if let Some(pos) = bucket.iter().position(|p| &p.node_id == id) {
+            bucket.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
     #[cfg(test)]
     pub fn bucket_len(&self, idx: usize) -> usize {
         self.buckets[idx].len()
