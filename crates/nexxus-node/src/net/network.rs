@@ -532,6 +532,7 @@ impl P2pNetwork {
                 .await
                 .map_err(|e| NexxusError::Io(e.to_string()))?;
             self.metrics.conns_accepted.fetch_add(1, Ordering::Relaxed);
+            crate::log_ev!("info", "conn.accepted", "addr" => addr.to_string());
             // NET-01: per-IP limits before spawning any work.
             {
                 let mut limits = self.ip_limits.lock().unwrap();
@@ -542,6 +543,7 @@ impl P2pNetwork {
                     || bucket.recent.len() as u64 >= MAX_NEW_PER_IP_PER_MIN
                 {
                     self.metrics.conns_rejected_ip.fetch_add(1, Ordering::Relaxed);
+                    crate::log_ev!("warn", "conn.rejected_ip", "addr" => addr.to_string());
                     continue; // drop the connection silently
                 }
                 bucket.active += 1;
@@ -752,6 +754,7 @@ impl P2pNetwork {
                     let r = tokio::time::timeout(HANDSHAKE_TIMEOUT, crate::net::frame::recv_frame(&mut stream)).await;
                     if r.is_err() {
                         self.metrics.handshake_timeouts.fetch_add(1, Ordering::Relaxed);
+                        crate::log_ev!("warn", "handshake.timeout", "addr" => addr.to_string());
                     }
                     r.unwrap_or_else(|_| Err(NexxusError::Io("handshake timeout".into())))
                 } else {

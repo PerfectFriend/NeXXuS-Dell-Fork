@@ -584,11 +584,13 @@ impl LocalApi {
     fn handle_node_backup(&self) -> Result<Value, NexxusError> {
         let r = crate::backup::backup_store(&self.store);
         match &r {
-            Ok(_) => {
+            Ok(m) => {
                 self.network.metrics.backup_ok.fetch_add(1, Ordering::Relaxed);
+                crate::log_ev!("info", "backup.ok", "name" => m.name.clone(), "chunks" => m.chunk_count);
             }
-            Err(_) => {
+            Err(e) => {
                 self.network.metrics.backup_fail.fetch_add(1, Ordering::Relaxed);
+                crate::log_ev!("error", "backup.fail", "err" => e.to_string());
             }
         }
         let m = r?;

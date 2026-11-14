@@ -30,6 +30,7 @@ mod seed_vault;
 mod backup;
 mod bundle;
 mod update;
+mod logging;
 
 use crate::net::P2pNetwork;
 use crate::storage::ChunkStore;
