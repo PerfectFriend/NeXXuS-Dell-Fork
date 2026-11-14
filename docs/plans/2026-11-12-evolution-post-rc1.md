@@ -125,7 +125,7 @@
 
 - Публичный registry bootstrap-пиров ✅ DONE: signed list (ed25519, expiry, canonical JSON) — bootstrap.rs, node_bootstrap_set/get, tamper/expired → error, e2e 46/46
 - Light client ✅ DONE (CLI): `nexxusd light status|chunks|peers|get <root-hex> <out>|pin <hash> [--api host:port] [--token-file path]` — без запуска демона, roundtrip проверен живьём; mobile viewer (Kotlin/WASM) — остался в плане
-- Плагины политик хранения (скрипт: «этот префикс только на onion-пирах»)
+- Плагины политик хранения ✅ DONE (v1): node_policy_set/list/delete/apply — правила по префиксу имени (pin | ttl:<secs>), реально применяются к чанкам; e2e 51/51. Расширение «только onion-пиры» — следующий шаг
 - Formal verification критичных кусков (session nonce binding, vault KDF, anti-loop) — точечно, не весь daemon
 
 ---

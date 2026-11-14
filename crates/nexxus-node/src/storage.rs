@@ -391,6 +391,71 @@ impl ChunkStore {
 
     // --- E2 retention: pin / TTL / GC (meta keys, chunk rows untouched) ---
 
+    /// E6 policy plugins: правило по префиксу имени — {id, name_prefix, action}.
+    /// action: "pin" (чанки имени пинятся навсегда) или "ttl:<secs>".
+    /// Хранится в meta "policy:<id>" как JSON.
+    pub fn policy_set(&self, id: &str, name_prefix: &str, action: &str) -> Result<(), NexxusError> {
+        if id.is_empty() || id.len() > 64 || id.contains(':') {
+            return Err(NexxusError::Io("bad policy id".into()));
+        }
+        if name_prefix.is_empty() || name_prefix.len() > 128 {
+            return Err(NexxusError::Io("bad name_prefix".into()));
+        }
+        if action != "pin" && !(action.starts_with("ttl:") && action[4..].parse::<u64>().is_ok()) {
+            return Err(NexxusError::Io("action must be 'pin' or 'ttl:<secs>'".into()));
+        }
+        let v = serde_json::json!({ "id": id, "name_prefix": name_prefix, "action": action });
+        self.put_meta(&format!("policy:{id}"), v.to_string().as_bytes())
+    }
+
+    pub fn policy_list(&self) -> Result<Vec<(String, String, String)>, NexxusError> {
+        let mut out = Vec::new();
+        for (_k, v) in self.list_meta_prefix("policy:")? {
+            if let Ok(j) = serde_json::from_slice::<serde_json::Value>(&v) {
+                out.push((
+                    j["id"].as_str().unwrap_or("").to_string(),
+                    j["name_prefix"].as_str().unwrap_or("").to_string(),
+                    j["action"].as_str().unwrap_or("").to_string(),
+                ));
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    pub fn policy_delete(&self, id: &str) -> Result<(), NexxusError> {
+        self.delete_meta(&format!("policy:{id}"))
+    }
+
+    /// E6: применить все политики к существующим именам: для каждого name с
+    /// совпадающим префиксом — взять текущий hash и выставить pin/ttl чанку.
+    /// Возвращает число применённых правил (name, policy) пар.
+    pub fn policy_apply(&self, now: u64) -> Result<usize, NexxusError> {
+        let policies = self.policy_list()?;
+        let names = self.name_list()?;
+        let mut applied = 0;
+        for (id, prefix, action) in &policies {
+            for name in &names {
+                if !name.starts_with(prefix.as_str()) {
+                    continue;
+                }
+                if let Some(h) = self.name_get(name)? {
+                    match action.as_str() {
+                        "pin" => self.pin_chunk(&h)?,
+                        a if a.starts_with("ttl:") => {
+                            let secs: u64 = a[4..].parse().unwrap_or(0);
+                            self.set_chunk_ttl(&h, secs, now)?;
+                        }
+                        _ => {}
+                    }
+                    applied += 1;
+                }
+            }
+            let _ = id;
+        }
+        Ok(applied)
+    }
+
     fn pin_key(hash: &ChunkHash) -> String {
         format!("pin_{}", hex::encode(hash.0))
     }
@@ -609,6 +674,35 @@ mod tests {
     /// Real SHA-256 of the payload — put_chunk verifies hash == SHA-256(data).
     fn h(data: &[u8]) -> ChunkHash {
         ChunkHash(sha2::Sha256::digest(data).into())
+    }
+
+    /// E6 policies: set/list/delete/apply — правило pin по префиксу реально
+    /// пинит чанк соответствующего имени.
+    #[test]
+    fn policy_apply_pins_matching_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexxus-test-pol-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let st = ChunkStore::open(&dir).unwrap();
+        let h1 = h(b"arch-1");
+        st.name_set("archive-a", &h1, 1).unwrap();
+        st.name_set("other-b", &h1, 2).unwrap();
+        st.policy_set("keep-archives", "archive", "pin").unwrap();
+        st.policy_set("ttl-other", "other", "ttl:3600").unwrap();
+        assert!(st.policy_set("bad", "x", "explode").is_err());
+        assert_eq!(st.policy_list().unwrap().len(), 2);
+        let applied = st.policy_apply(1000).unwrap();
+        assert_eq!(applied, 2, "оба имени matched свои политики");
+        assert!(st.is_pinned(&h1).unwrap(), "archive-a запинен через политику");
+        st.policy_delete("keep-archives").unwrap();
+        assert_eq!(st.policy_list().unwrap().len(), 1);
+        drop(st);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -190,4 +190,17 @@ check("bootstrap_set bad sig → error", "error" in r, r)
 r = call("node_bootstrap_get", token=token)
 check("bootstrap_get без валидного списка → null или error", True, r)
 
+
+print("== E6 storage policies ==")
+r = call("node_policy_set", {"id": "keep-e2e", "name_prefix": nm, "action": "pin"}, token=token)
+check("policy_set pin", "result" in r, r)
+r = call("node_policy_set", {"id": "bad", "name_prefix": "x", "action": "explode"}, token=token)
+check("policy_set bad action → error", "error" in r, r)
+r = call("node_policy_list", token=token)
+check("policy_list содержит keep-e2e", any(p.get("id") == "keep-e2e" for p in r.get("result", {}).get("policies", [])), r)
+r = call("node_policy_apply", token=token)
+check("policy_apply applied>=1", r.get("result", {}).get("applied", 0) >= 1, r)
+r = call("node_policy_delete", {"id": "keep-e2e"}, token=token)
+check("policy_delete", "result" in r, r)
+
 print(f"\nE2E SMOKE: {len(ok)}/{len(ok)} проверок прошли")

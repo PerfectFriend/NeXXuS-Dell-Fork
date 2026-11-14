@@ -442,6 +442,10 @@ impl LocalApi {
             "node_name_list" => self.handle_node_name_list(),
             "node_bootstrap_set" => self.handle_node_bootstrap_set(req.params),
             "node_bootstrap_get" => self.handle_node_bootstrap_get(),
+            "node_policy_set" => self.handle_node_policy_set(req.params),
+            "node_policy_list" => self.handle_node_policy_list(),
+            "node_policy_delete" => self.handle_node_policy_delete(req.params),
+            "node_policy_apply" => self.handle_node_policy_apply(),
             "node_gc" => self.handle_node_gc(),
             "node_export_bundle" => self.handle_node_export_bundle(req.params),
             "node_import_bundle" => self.handle_node_import_bundle(req.params),
@@ -1040,6 +1044,47 @@ impl LocalApi {
         Ok(serde_json::json!({
             "ok": true, "addrs": env.payload.addrs.len(), "expiry_unix": env.payload.expiry_unix
         }))
+    }
+
+    /// E6 policies: установить правило {id, name_prefix, action=pin|ttl:<secs>}.
+    fn handle_node_policy_set(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let p = params.ok_or_else(|| NexxusError::Io("params required".into()))?;
+        let id = p.get("id").and_then(|v| v.as_str()).ok_or_else(|| NexxusError::Io("param 'id'".into()))?;
+        let prefix = p.get("name_prefix").and_then(|v| v.as_str()).ok_or_else(|| NexxusError::Io("param 'name_prefix'".into()))?;
+        let action = p.get("action").and_then(|v| v.as_str()).ok_or_else(|| NexxusError::Io("param 'action'".into()))?;
+        self.store.policy_set(id, prefix, action)?;
+        Ok(serde_json::json!({ "ok": true, "id": id }))
+    }
+
+    /// E6 policies: список правил.
+    fn handle_node_policy_list(&self) -> Result<Value, NexxusError> {
+        let list = self
+            .store
+            .policy_list()?
+            .into_iter()
+            .map(|(id, prefix, action)| serde_json::json!({ "id": id, "name_prefix": prefix, "action": action }))
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!({ "policies": list }))
+    }
+
+    /// E6 policies: удалить правило по id.
+    fn handle_node_policy_delete(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let id = params
+            .and_then(|p| p.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .ok_or_else(|| NexxusError::Io("param 'id'".into()))?;
+        self.store.policy_delete(&id)?;
+        Ok(serde_json::json!({ "ok": true, "id": id }))
+    }
+
+    /// E6 policies: применить все правила к существующим именам (pin/ttl чанков).
+    fn handle_node_policy_apply(&self) -> Result<Value, NexxusError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let applied = self.store.policy_apply(now)?;
+        crate::log_ev!("info", "policy.applied", "count" => applied);
+        Ok(serde_json::json!({ "applied": applied }))
     }
 
     /// E6: текущий bootstrap-список (с проверкой подписи/expiry). null если нет.
