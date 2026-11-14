@@ -39,7 +39,7 @@
 
 - [ ] Тег `v0.1.0-rc1` **только со squash-mirror**
 - [ ] `SECURITY.md` + short USER_GUIDE «что умеет / чего нет»
-- [ ] Метрики в проде: число peers, handshake timeouts, RSS, backup success rate
+- [x] Метрики в проде: peers (nexxus_peers_connected/known), handshake timeouts, RSS (nexxus_process_rss_bytes), backup ok/fail, uptime — token-gated GET /metrics
 - [x] Bind-адрес: `NEXXUS_LISTEN` (дефолт `127.0.0.1:4001`), задокументирован в USER_GUIDE
 - [ ] README: явная ссылка на threat model и audit series
 

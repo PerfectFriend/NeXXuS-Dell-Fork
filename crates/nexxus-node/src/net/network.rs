@@ -140,6 +140,8 @@ pub struct Metrics {
     pub fetch_miss: AtomicU64,
     pub por_ok: AtomicU64,
     pub por_fail: AtomicU64,
+    pub backup_ok: AtomicU64,
+    pub backup_fail: AtomicU64,
 }
 
 impl Metrics {
@@ -160,6 +162,8 @@ impl Metrics {
             "fetch_miss": self.fetch_miss.load(Ordering::Relaxed),
             "por_ok": self.por_ok.load(Ordering::Relaxed),
             "por_fail": self.por_fail.load(Ordering::Relaxed),
+            "backup_ok": self.backup_ok.load(Ordering::Relaxed),
+            "backup_fail": self.backup_fail.load(Ordering::Relaxed),
         })
     }
 

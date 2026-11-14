@@ -24,6 +24,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
@@ -198,6 +199,13 @@ pub struct LocalApi {
 
 /// JSON-RPC error code: не пройдена аутентификация.
 pub const ERR_UNAUTHORIZED: i32 = -32001;
+
+/// RSS текущего процесса в байтах (Linux: /proc/self/statm). Для /metrics.
+fn rss_bytes() -> Option<u64> {
+    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+    let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    Some(resident_pages * 4096)
+}
 
 /// Parse params.hash (64 hex chars) into a ChunkHash.
 fn parse_hash_param(params: Option<Value>) -> Result<ChunkHash, NexxusError> {
@@ -573,7 +581,16 @@ impl LocalApi {
 
     /// Store backup (R3): file-level copy + manifest. Safe on a running node.
     fn handle_node_backup(&self) -> Result<Value, NexxusError> {
-        let m = crate::backup::backup_store(&self.store)?;
+        let r = crate::backup::backup_store(&self.store);
+        match &r {
+            Ok(_) => {
+                self.network.metrics.backup_ok.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                self.network.metrics.backup_fail.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let m = r?;
         serde_json::to_value(m).map_err(|e| NexxusError::Io(e.to_string()))
     }
 
@@ -1421,6 +1438,16 @@ impl LocalApi {
             body.push_str(&format!("nexxus_store_cap_bytes {cap}\n"));
             body.push_str(&format!("nexxus_store_disk_free_bytes {free}\n"));
             body.push_str(&format!("nexxus_store_chunks {chunks}\n"));
+            // E0: prod gauges — peers, RSS, uptime (plan item «метрики в проде»).
+            let peers_connected = self.connected_peers.lock().await.len();
+            let peers_known = self.network.known_peers().await.len();
+            let rss_bytes = rss_bytes().unwrap_or(0);
+            let uptime_s = self.start_time.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+            body.push_str("# HELP nexxus_runtime Runtime gauges.\n# TYPE nexxus_runtime gauge\n");
+            body.push_str(&format!("nexxus_peers_connected {peers_connected}\n"));
+            body.push_str(&format!("nexxus_peers_known {peers_known}\n"));
+            body.push_str(&format!("nexxus_process_rss_bytes {rss_bytes}\n"));
+            body.push_str(&format!("nexxus_uptime_seconds {uptime_s}\n"));
             body
         } else {
             String::from("unauthorized\n")
