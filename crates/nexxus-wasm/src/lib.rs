@@ -103,6 +103,99 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+    hex::decode(s).map_err(|e| format!("bad hex: {e}"))
+}
+
+fn key32(key_hex: &str) -> Result<[u8; 32], String> {
+    let b = hex_decode(key_hex)?;
+    <[u8; 32]>::try_from(b.as_slice()).map_err(|_| "key must be 32 bytes (64 hex)".to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Light-client surface (E6): браузерный applet скачивает sealed чанки через
+// WS API ноды (JS WebSocket) и открывает их локально — нода ключ не видит.
+// ---------------------------------------------------------------------------
+
+/// Seal one chunk with the per-file vault key (same AEAD as the node:
+/// XChaCha20-Poly1305, nonce derived from key+index). Returns sealed bytes.
+fn seal_chunk_impl(key_hex: &str, chunk_index: u64, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    let key = key32(key_hex)?;
+    nexxus_core::chunk::ChunkAead::seal(&key, chunk_index, plaintext).map_err(|e| e.to_string())
+}
+
+#[wasm_bindgen]
+pub fn seal_chunk(key_hex: &str, chunk_index: u64, plaintext: &[u8]) -> Result<Vec<u8>, JsError> {
+    seal_chunk_impl(key_hex, chunk_index, plaintext).map_err(|e| JsError::new(&e))
+}
+
+/// Open a sealed chunk with the per-file vault key. Wrong key/tamper → Err.
+fn open_chunk_impl(key_hex: &str, chunk_index: u64, sealed: &[u8]) -> Result<Vec<u8>, String> {
+    let key = key32(key_hex)?;
+    nexxus_core::chunk::ChunkAead::open(&key, chunk_index, sealed).map_err(|e| e.to_string())
+}
+
+#[wasm_bindgen]
+pub fn open_chunk(key_hex: &str, chunk_index: u64, sealed: &[u8]) -> Result<Vec<u8>, JsError> {
+    open_chunk_impl(key_hex, chunk_index, sealed).map_err(|e| JsError::new(&e))
+}
+
+/// ChunkHash of a sealed chunk (hex SHA-256) — matches what the node stores.
+#[wasm_bindgen]
+pub fn sealed_chunk_hash_hex(sealed: &[u8]) -> String {
+    hex_encode(&sha256(sealed))
+}
+
+/// Flat merkle proof for `leaf_index`: 33 bytes per level (32-byte hash + 1 side byte).
+/// `leaves_flat` = concatenated 32-byte leaf hashes.
+fn merkle_proof_flat_impl(leaves_flat: &[u8], leaf_index: usize) -> Result<Vec<u8>, String> {
+    if !leaves_flat.len().is_multiple_of(32) {
+        return Err("leaves_flat must be a multiple of 32 bytes".into());
+    }
+    let leaves: Vec<[u8; 32]> = leaves_flat
+        .chunks(32)
+        .map(|c| <[u8; 32]>::try_from(c).unwrap())
+        .collect();
+    let proof = merkle::merkle_proof(&leaves, leaf_index);
+    let mut out = Vec::with_capacity(proof.len() * 33);
+    for (h, is_right) in proof {
+        out.extend_from_slice(&h);
+        out.push(if is_right { 1 } else { 0 });
+    }
+    Ok(out)
+}
+
+#[wasm_bindgen]
+pub fn merkle_proof_flat(leaves_flat: &[u8], leaf_index: usize) -> Result<Vec<u8>, JsError> {
+    merkle_proof_flat_impl(leaves_flat, leaf_index).map_err(|e| JsError::new(&e))
+}
+
+/// Verify a flat merkle proof against root/leaf (hex). Tamper → false.
+fn merkle_verify_flat_impl(root_hex: &str, leaf_hex: &str, leaf_index: usize, proof_flat: &[u8]) -> bool {
+    let root: [u8; 32] = match hex_decode(root_hex).ok().and_then(|v| <[u8; 32]>::try_from(v.as_slice()).ok()) {
+        Some(r) => r,
+        None => return false,
+    };
+    let leaf: [u8; 32] = match hex_decode(leaf_hex).ok().and_then(|v| <[u8; 32]>::try_from(v.as_slice()).ok()) {
+        Some(l) => l,
+        None => return false,
+    };
+    if !proof_flat.len().is_multiple_of(33) {
+        return false;
+    }
+    let proof: Vec<([u8; 32], bool)> = proof_flat
+        .chunks(33)
+        .map(|c| (<[u8; 32]>::try_from(&c[..32]).unwrap(), c[32] == 1))
+        .collect();
+    merkle::verify_proof(&root, &leaf, leaf_index, &proof)
+}
+
+#[wasm_bindgen]
+pub fn merkle_verify_flat(root_hex: &str, leaf_hex: &str, leaf_index: usize, proof_flat: &[u8]) -> bool {
+    merkle_verify_flat_impl(root_hex, leaf_hex, leaf_index, proof_flat)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +225,42 @@ mod tests {
         let id2 = node_id_from_mnemonic(&m).unwrap();
         assert_eq!(id1, id2);
         assert_eq!(id1.len(), 64);
+    }
+
+    #[test]
+    fn light_client_seal_open_and_hash() {
+        let key = [7u8; 32];
+        let key_hex = hex_encode(&key);
+        let plain = b"hello nexxus light client";
+        let sealed = seal_chunk_impl(&key_hex, 3, plain).unwrap();
+        // hash совпадает с node-side ChunkHash(sha256(sealed))
+        assert_eq!(sealed_chunk_hash_hex(&sealed), hex_encode(&sha256(&sealed)));
+        let back = open_chunk_impl(&key_hex, 3, &sealed).unwrap();
+        assert_eq!(back, plain);
+        // wrong key / wrong index / tamper → error
+        let bad_key = hex_encode(&[8u8; 32]);
+        assert!(open_chunk_impl(&bad_key, 3, &sealed).is_err());
+        assert!(open_chunk_impl(&key_hex, 4, &sealed).is_err());
+        let mut tampered = sealed.clone();
+        tampered[0] ^= 1;
+        assert!(open_chunk_impl(&key_hex, 3, &tampered).is_err());
+    }
+
+    #[test]
+    fn merkle_proof_flat_verify_and_tamper() {
+        let leaves: Vec<[u8; 32]> = (0..8u8).map(|i| sha256(&[i])).collect();
+        let flat: Vec<u8> = leaves.iter().flat_map(|a| a.iter().copied()).collect();
+        let root = merkle::merkle_root(&leaves);
+        let proof = merkle_proof_flat_impl(&flat, 5).unwrap();
+        assert!(proof.len().is_multiple_of(33));
+        assert!(merkle_verify_flat_impl(&hex_encode(&root), &hex_encode(&leaves[5]), 5, &proof));
+        // tamper: другой leaf → false
+        assert!(!merkle_verify_flat_impl(&hex_encode(&root), &hex_encode(&leaves[4]), 5, &proof));
+        // tampered proof → false
+        let mut bad = proof.clone();
+        bad[0] ^= 1;
+        assert!(!merkle_verify_flat_impl(&hex_encode(&root), &hex_encode(&leaves[5]), 5, &bad));
+        // мусорный вход → false, без паники
+        assert!(!merkle_verify_flat_impl("zz", "zz", 0, &[1, 2, 3]));
     }
 }

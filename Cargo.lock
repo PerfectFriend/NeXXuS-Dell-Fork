@@ -2474,6 +2474,8 @@ dependencies = [
 name = "nexxus-wasm"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.2.17",
+ "hex",
  "nexxus-core",
  "sha2 0.10.9",
  "wasm-bindgen",

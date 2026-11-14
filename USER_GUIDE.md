@@ -83,3 +83,7 @@ nexxusd            # слушает P2P 127.0.0.1:4001, Local API 127.0.0.1:4010
 - Политика `{"action": "onion-only"}` по префиксу имени: чанки помечаются флагом `onion_only` и всегда pinned; при upload они **не** отсылаются clearnet-пирам из routing table.
 - `node_chunk_onion_only {"hash": "<hex64>", "on": true}` — ручной флаг; `node_onion_only_list` — список.
 - `node_replicate_onion` — разослать все onion-only чанки на `.onion`-адреса из signed bootstrap-списка через Tor (нужен `NEXXUS_TOR=1` и установленный список).
+
+### WASM light client (E6, web-applet)
+`crates/nexxus-wasm` собирается под `wasm32-unknown-unknown` (проверено: `cargo build -p nexxus-wasm --target wasm32-unknown-unknown --release`).
+Экспорт: `seal_chunk` / `open_chunk` (тот же XChaCha20-Poly1305, что у ноды — браузер открывает sealed чанки локально по ключу файла из манифеста, нода ключ не видит), `sealed_chunk_hash_hex`, `merkle_proof_flat` / `merkle_verify_flat` (проверка целостности по merkle-доказательству), плюс chunking/RS/merkle/identity из прежнего набора. Сеть — через JS WebSocket к WS API ноды; ключи в браузер попадают только явно из манифеста.

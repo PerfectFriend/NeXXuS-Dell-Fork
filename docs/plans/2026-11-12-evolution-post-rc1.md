@@ -124,7 +124,7 @@
 ### Фаза E6 — «Экосистема» (после стабильного E2–E3)
 
 - Публичный registry bootstrap-пиров ✅ DONE: signed list (ed25519, expiry, canonical JSON) — bootstrap.rs, node_bootstrap_set/get, tamper/expired → error, e2e 46/46
-- Light client ✅ DONE (CLI): `nexxusd light status|chunks|peers|get <root-hex> <out>|pin <hash> [--api host:port] [--token-file path]` — без запуска демона, roundtrip проверен живьём; mobile viewer (Kotlin/WASM) — остался в плане
+- Light client ✅ DONE (CLI): `nexxusd light status|chunks|peers|get <root-hex> <out>|pin <hash> [--api host:port] [--token-file path]` — без запуска демона, roundtrip проверен живьём; WASM web-applet ✅ DONE: nexxus-wasm расширен light-client поверхом (seal/open чанков локально, merkle proof verify, hash) — сборка под wasm32-unknown-unknown проверена, тесты 4/4; Kotlin mobile viewer — остался в плане
 - Плагины политик хранения ✅ DONE (v1): node_policy_set/list/delete/apply — правила по префиксу имени (pin | ttl:<secs>), реально применяются к чанкам; e2e 51/51. Расширение «только onion-пиры» ✅ DONE: action `onion-only` (флаг + pin, upload не шлёт clearnet-пирам), `node_chunk_onion_only` / `node_onion_only_list` / `node_replicate_onion` (репликация на .onion из bootstrap через Tor); e2e 58/58
 - Formal verification критичных кусков (session nonce binding, vault KDF, anti-loop) — точечно, не весь daemon
 
@@ -205,3 +205,4 @@ Q3+             E6 Ecosystem, formal bits, marketplace only with real settlement
 - [x] E3 property tests: nexxus-econ/tests/props.rs (proptest)
 - [x] E0 hygiene: README→THREAT_MODEL/audits, SECURITY.md/USER_GUIDE закрыты
 - [x] E6 onion-only политики + репликация через Tor (policy action, upload- enforcement, node_replicate_onion); e2e 58/58
+- [x] E6 WASM light-client surface: seal_chunk/open_chunk/sealed_chunk_hash_hex/merkle_proof_flat/merkle_verify_flat в nexxus-wasm; wasm32 release build OK (916KB), host tests 4/4
