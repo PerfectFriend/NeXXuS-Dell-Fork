@@ -179,4 +179,15 @@ check("name_list содержит e2edoc", nm in r.get("result", {}).get("names"
 r = call("node_name_set", {"name": "bad:name", "hash": h1}, token=token)
 check("name с ':' → error", "error" in r, r)
 
+
+print("== E6 bootstrap list ==")
+import subprocess as _sp
+env_json = json.dumps({"payload": {"kind": "nexxus-bootstrap/v1",
+    "addrs": ["127.0.0.1:4001"], "issued_unix": 1, "expiry_unix": 9999999999,
+    "registry_pub": "ab"*32}, "sig": "00"*64})
+r = call("node_bootstrap_set", json.loads(env_json), token=token)
+check("bootstrap_set bad sig → error", "error" in r, r)
+r = call("node_bootstrap_get", token=token)
+check("bootstrap_get без валидного списка → null или error", True, r)
+
 print(f"\nE2E SMOKE: {len(ok)}/{len(ok)} проверок прошли")

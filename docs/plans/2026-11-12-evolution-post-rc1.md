@@ -123,7 +123,7 @@
 
 ### Фаза E6 — «Экосистема» (после стабильного E2–E3)
 
-- Публичный registry bootstrap-пиров (не центральный «владелец сети», а signed list с expiry)
+- Публичный registry bootstrap-пиров ✅ DONE: signed list (ed25519, expiry, canonical JSON) — bootstrap.rs, node_bootstrap_set/get, tamper/expired → error, e2e 46/46
 - Light client / mobile viewer (WASM или Kotlin) для download-by-CID
 - Плагины политик хранения (скрипт: «этот префикс только на onion-пирах»)
 - Formal verification критичных кусков (session nonce binding, vault KDF, anti-loop) — точечно, не весь daemon

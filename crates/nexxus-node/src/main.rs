@@ -31,6 +31,7 @@ mod backup;
 mod bundle;
 mod update;
 mod logging;
+mod bootstrap;
 
 use crate::net::P2pNetwork;
 use crate::storage::ChunkStore;

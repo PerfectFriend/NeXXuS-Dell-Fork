@@ -440,6 +440,8 @@ impl LocalApi {
             "node_name_get" => self.handle_node_name_get(req.params),
             "node_name_history" => self.handle_node_name_history(req.params),
             "node_name_list" => self.handle_node_name_list(),
+            "node_bootstrap_set" => self.handle_node_bootstrap_set(req.params),
+            "node_bootstrap_get" => self.handle_node_bootstrap_get(),
             "node_gc" => self.handle_node_gc(),
             "node_export_bundle" => self.handle_node_export_bundle(req.params),
             "node_import_bundle" => self.handle_node_import_bundle(req.params),
@@ -1020,6 +1022,39 @@ impl LocalApi {
     /// E2 versioning: список всех имён.
     fn handle_node_name_list(&self) -> Result<Value, NexxusError> {
         Ok(serde_json::json!({ "names": self.store.name_list()? }))
+    }
+
+    /// E6: принять signed bootstrap-список (envelope {payload, sig}).
+    /// Проверка подписи ed25519 и expiry — внутри bootstrap::store_set.
+    fn handle_node_bootstrap_set(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let env: crate::bootstrap::BootstrapEnvelope = serde_json::from_value(
+            params.ok_or_else(|| NexxusError::Io("params required".into()))?,
+        )
+        .map_err(|e| NexxusError::Io(format!("bad envelope: {e}")))?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        crate::bootstrap::store_set(&self.store, &env, now)?;
+        crate::log_ev!("info", "bootstrap.list.accepted", "addrs" => env.payload.addrs.len(), "expiry_unix" => env.payload.expiry_unix);
+        Ok(serde_json::json!({
+            "ok": true, "addrs": env.payload.addrs.len(), "expiry_unix": env.payload.expiry_unix
+        }))
+    }
+
+    /// E6: текущий bootstrap-список (с проверкой подписи/expiry). null если нет.
+    fn handle_node_bootstrap_get(&self) -> Result<Value, NexxusError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let list = crate::bootstrap::store_get(&self.store, now)?;
+        Ok(serde_json::json!({
+            "bootstrap": list.map(|l| serde_json::json!({
+                "addrs": l.addrs, "issued_unix": l.issued_unix,
+                "expiry_unix": l.expiry_unix, "registry_pub": l.registry_pub,
+            })),
+        }))
     }
 
     /// E2 retention: delete all expired unpinned chunks now.
