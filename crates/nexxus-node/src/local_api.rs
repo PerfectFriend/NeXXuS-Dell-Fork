@@ -446,6 +446,9 @@ impl LocalApi {
             "node_name_list" => self.handle_node_name_list(),
             "node_bootstrap_set" => self.handle_node_bootstrap_set(req.params),
             "node_bootstrap_get" => self.handle_node_bootstrap_get(),
+            "node_chunk_onion_only" => self.handle_node_chunk_onion_only(req.params),
+            "node_onion_only_list" => self.handle_node_onion_only_list(),
+            "node_replicate_onion" => self.handle_node_replicate_onion().await,
             "node_policy_set" => self.handle_node_policy_set(req.params),
             "node_policy_list" => self.handle_node_policy_list(),
             "node_policy_delete" => self.handle_node_policy_delete(req.params),
@@ -1061,6 +1064,81 @@ impl LocalApi {
     /// BS-01: установить pin registry_pub (hex64, lowercase). None = без pin.
     pub fn set_bootstrap_registry_pin(&self, hex: Option<String>) {
         *self.bootstrap_registry_pin.lock().unwrap() = hex.map(|h| h.to_lowercase());
+    }
+
+    /// E6 onion-only: установить/снять флаг chunk'а вручную. params: {hash:<hex64>, on:bool}
+    fn handle_node_chunk_onion_only(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let p = params.ok_or_else(|| NexxusError::Io("params required".into()))?;
+        let hexstr = p.get("hash").and_then(|v| v.as_str()).ok_or_else(|| NexxusError::Io("param 'hash'".into()))?;
+        let on = p.get("on").and_then(|v| v.as_bool()).unwrap_or(true);
+        let h = parse_hash_param(Some(serde_json::json!({ "hash": hexstr })))?;
+        self.store.set_onion_only(&h, on)?;
+        if on {
+            self.store.pin_chunk(&h)?;
+        }
+        crate::log_ev!("info", "chunk.onion_only", "hash" => &hexstr[..16.min(hexstr.len())], "on" => on);
+        Ok(serde_json::json!({ "ok": true, "hash": hexstr, "on": on }))
+    }
+
+    /// E6: список чанков с флагом onion-only.
+    fn handle_node_onion_only_list(&self) -> Result<Value, NexxusError> {
+        let list = self
+            .store
+            .onion_only_list()?
+            .into_iter()
+            .map(|h| hex::encode(h.0))
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!({ "onion_only": list }))
+    }
+
+    /// E6: репликация всех onion-only чанков на .onion-адреса из signed
+    /// bootstrap-списка (через Tor). Требует NEXXUS_TOR=1 и валидный список.
+    #[cfg(feature = "tor")]
+    async fn handle_node_replicate_onion(&self) -> Result<Value, NexxusError> {
+        let ts = self
+            .tor_session
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| NexxusError::Io("tor session not running (NEXXUS_TOR=0?)".into()))?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let boot = crate::bootstrap::store_get(&self.store, now)?
+            .ok_or_else(|| NexxusError::Io("no bootstrap list installed (node_bootstrap_set)".into()))?;
+        let onion_addrs: Vec<&String> = boot.addrs.iter().filter(|a| crate::net::network::P2pNetwork::is_onion_addr(a)).collect();
+        if onion_addrs.is_empty() {
+            return Err(NexxusError::Io("bootstrap list has no .onion addrs".into()));
+        }
+        let chunks = self.store.onion_only_list()?;
+        let mut sent = 0usize;
+        let mut errors = Vec::new();
+        for h in &chunks {
+            let data = match self.store.get_chunk(h)? {
+                Some(d) => d,
+                None => continue,
+            };
+            let sc = nexxus_core::wire::payloads::StoreChunk {
+                chunk_hash: *h,
+                file_id: 0,
+                chunk_index: 0,
+                data,
+            };
+            for addr in &onion_addrs {
+                match self.network.send_store_chunk_onion(&ts, addr, &sc).await {
+                    Ok(_) => sent += 1,
+                    Err(e) => errors.push(format!("{addr}: {e}")),
+                }
+            }
+        }
+        crate::log_ev!("info", "chunk.replicate_onion", "chunks" => chunks.len(), "sent" => sent, "errors" => errors.len());
+        Ok(serde_json::json!({
+            "chunks": chunks.len(), "targets": onion_addrs.len(), "sent": sent,
+            "errors": errors.iter().take(5).collect::<Vec<_>>(),
+        }))
+    }
+
+    #[cfg(not(feature = "tor"))]
+    async fn handle_node_replicate_onion(&self) -> Result<Value, NexxusError> {
+        Err(NexxusError::Io("built without tor feature".into()))
     }
 
     /// E6 policies: установить правило {id, name_prefix, action=pin|ttl:<secs>}.

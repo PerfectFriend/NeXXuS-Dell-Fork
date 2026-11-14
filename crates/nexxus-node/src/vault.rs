@@ -58,6 +58,10 @@ pub async fn upload_file(
             let hash = ChunkHash(sha256(&sealed));
             store.put_chunk(&hash, &sealed)?;
             for p in &peers {
+                // E6 onion-only: чанк с флагом не отдаётся clearnet-пирам (routing table = TCP).
+                if store.is_onion_only(&hash)? {
+                    continue;
+                }
                 let sc = StoreChunk {
                     chunk_hash: hash,
                     file_id,

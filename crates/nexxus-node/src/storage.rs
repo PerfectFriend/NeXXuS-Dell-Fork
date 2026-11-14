@@ -401,8 +401,8 @@ impl ChunkStore {
         if name_prefix.is_empty() || name_prefix.len() > 128 {
             return Err(NexxusError::Io("bad name_prefix".into()));
         }
-        if action != "pin" && !(action.starts_with("ttl:") && action[4..].parse::<u64>().is_ok()) {
-            return Err(NexxusError::Io("action must be 'pin' or 'ttl:<secs>'".into()));
+        if action != "pin" && action != "onion-only" && !(action.starts_with("ttl:") && action[4..].parse::<u64>().is_ok()) {
+            return Err(NexxusError::Io("action must be 'pin', 'onion-only' or 'ttl:<secs>'".into()));
         }
         let v = serde_json::json!({ "id": id, "name_prefix": name_prefix, "action": action });
         self.put_meta(&format!("policy:{id}"), v.to_string().as_bytes())
@@ -442,6 +442,10 @@ impl ChunkStore {
                 if let Some(h) = self.name_get(name)? {
                     match action.as_str() {
                         "pin" => self.pin_chunk(&h)?,
+                        "onion-only" => {
+                            self.set_onion_only(&h, true)?;
+                            self.pin_chunk(&h)?; // onion-only chanк всегда pinned
+                        }
                         a if a.starts_with("ttl:") => {
                             let secs: u64 = a[4..].parse().unwrap_or(0);
                             self.set_chunk_ttl(&h, secs, now)?;
@@ -461,6 +465,37 @@ impl ChunkStore {
     }
     fn ttl_key(hash: &ChunkHash) -> String {
         format!("ttl_exp_{}", hex::encode(hash.0))
+    }
+    fn onion_only_key(hash: &ChunkHash) -> String {
+        format!("onion_only_{}", hex::encode(hash.0))
+    }
+
+    /// E6 onion-only: пометить чанк — реплицировать только на .onion-пиров.
+    pub fn set_onion_only(&self, hash: &ChunkHash, on: bool) -> Result<(), NexxusError> {
+        if on {
+            self.put_meta(&Self::onion_only_key(hash), b"1")
+        } else {
+            self.delete_meta(&Self::onion_only_key(hash))
+        }
+    }
+
+    pub fn is_onion_only(&self, hash: &ChunkHash) -> Result<bool, NexxusError> {
+        Ok(self.get_meta(&Self::onion_only_key(hash))?.is_some())
+    }
+
+    /// Список чанков с флагом onion-only.
+    pub fn onion_only_list(&self) -> Result<Vec<ChunkHash>, NexxusError> {
+        let mut out = Vec::new();
+        for (k, _v) in self.list_meta_prefix("onion_only_")? {
+            if let Some(hexpart) = k.strip_prefix("onion_only_") {
+                if let Ok(bytes) = hex::decode(hexpart) {
+                    if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                        out.push(ChunkHash(arr));
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Pin a chunk: pinned chunks are never GC'd and ignore TTL expiry.
@@ -667,6 +702,33 @@ mod tests {
         assert_eq!(hist, vec![(100, h1), (200, h2)]);
         assert_eq!(st.name_list().unwrap(), vec!["doc".to_string()]);
         assert!(st.name_set("a:b", &h1, 1).is_err(), "':' в имени запрещён");
+        drop(st);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn onion_only_flag_roundtrip_and_policy() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexxus-test-onion-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let st = ChunkStore::open(&dir).unwrap();
+        let h1 = h(b"secret-1");
+        st.name_set("vault-x", &h1, 1).unwrap();
+        assert!(!st.is_onion_only(&h1).unwrap());
+        st.set_onion_only(&h1, true).unwrap();
+        assert!(st.is_onion_only(&h1).unwrap());
+        assert_eq!(st.onion_only_list().unwrap(), vec![h1]);
+        // policy action onion-only: флаг + pin
+        st.policy_set("onion-vault", "vault", "onion-only").unwrap();
+        let applied = st.policy_apply(1000).unwrap();
+        assert!(applied >= 1);
+        assert!(st.is_onion_only(&h1).unwrap());
+        assert!(st.is_pinned(&h1).unwrap(), "onion-only всегда pin");
+        st.set_onion_only(&h1, false).unwrap();
+        assert!(!st.is_onion_only(&h1).unwrap());
+        assert!(st.onion_only_list().unwrap().is_empty());
         drop(st);
         let _ = std::fs::remove_dir_all(&dir);
     }

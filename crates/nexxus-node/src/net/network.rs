@@ -506,6 +506,11 @@ impl P2pNetwork {
         Ok((opcode, req_id, payload))
     }
 
+    /// True если адрес — Tor onion v3 (`<56ch>.onion[:port]`).
+    pub fn is_onion_addr(addr: &str) -> bool {
+        addr.split(':').next().unwrap_or("").ends_with(".onion")
+    }
+
     /// Dial a peer through its Tor onion v3 address (`<56ch>.onion:port`):
     /// открываем arti DataStream и делаем signed NodeAnnounce handshake поверх
     /// него. Требует feature `tor` (включён по умолчанию).
@@ -520,6 +525,43 @@ impl P2pNetwork {
             .await
             .map_err(|e| NexxusError::Io(format!("tor connect {onion_addr}: {e}")))?;
         Ok(self.announce_handshake(&mut stream, 0x0013).await?.peer_id)
+    }
+
+    /// E6 onion-only: push a chunk to a peer over its Tor onion address.
+    /// Тот же handshake + StoreChunk + StoreChunkAck, что и send_store_chunk,
+    /// но транспорт — arti DataStream вместо TCP.
+    #[cfg(feature = "tor")]
+    pub async fn send_store_chunk_onion(
+        &self,
+        tor: &crate::tor::TorSession,
+        onion_addr: &str,
+        chunk: &nexxus_core::wire::payloads::StoreChunk,
+    ) -> Result<ChunkHash, NexxusError> {
+        let mut stream = tor
+            .connect_onion(onion_addr)
+            .await
+            .map_err(|e| NexxusError::Io(format!("tor connect {onion_addr}: {e}")))?;
+        let hs = self.announce_handshake(&mut stream, 0x0004).await?;
+        self.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::StoreChunk, 0x0003, chunk)
+            .await?;
+        let (op, _rid, payload) = self.recv_verified_frame(&mut stream, &hs).await?;
+        match op {
+            Opcode::StoreChunkAck => {
+                let ack = nexxus_core::wire::payloads::StoreChunkAck::decode(&payload)?;
+                Ok(ChunkHash(ack.hash))
+            }
+            Opcode::ErrorResponse => {
+                let e = nexxus_core::wire::payloads::ErrorResponse::decode(&payload)?;
+                Err(NexxusError::Io(format!(
+                    "onion peer rejected StoreChunk: {} (0x{:04x})",
+                    e.message, e.code
+                )))
+            }
+            other => Err(NexxusError::Io(format!(
+                "expected StoreChunkAck, got opcode 0x{:02x}",
+                other.to_u8()
+            ))),
+        }
     }
 
     /// Bind listen address and accept connections forever. Each connection
@@ -1201,6 +1243,15 @@ mod tests {
     use nexxus_core::wire::payloads::{CommitteeSig, EpochFinalize};
     use sha2::Digest;
     use std::net::Ipv4Addr;
+
+    #[test]
+    fn onion_addr_detection() {
+        assert!(P2pNetwork::is_onion_addr("abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuv.onion:4001"));
+        assert!(P2pNetwork::is_onion_addr("xyz.onion"));
+        assert!(!P2pNetwork::is_onion_addr("127.0.0.1:4001"));
+        assert!(!P2pNetwork::is_onion_addr("example.com:4001"));
+        assert!(!P2pNetwork::is_onion_addr("notonion.onion.evil.com"));
+    }
     use tempfile::tempdir;
     use crate::net::routing::Peer;
 

@@ -207,4 +207,17 @@ check("policy_apply applied>=1", r.get("result", {}).get("applied", 0) >= 1, r)
 r = call("node_policy_delete", {"id": "keep-e2e"}, token=token)
 check("policy_delete", "result" in r, r)
 
+
+print("== E6 onion-only policies ==")
+r = call("node_policy_set", {"id": "onion-vault", "name_prefix": nm, "action": "onion-only"}, token=token)
+check("policy_set onion-only", "result" in r, r)
+r = call("node_policy_apply", {"confirm": True}, token=token)
+check("policy_apply с onion-only", r.get("result", {}).get("applied", 0) >= 1, r)
+r = call("node_onion_only_list", token=token)
+check("onion_only_list непустой", len(r.get("result", {}).get("onion_only", [])) >= 1, r)
+r = call("node_chunk_onion_only", {"hash": "00" * 32, "on": False}, token=token)
+check("chunk_onion_only off на чужом hash — ок", "result" in r, r)
+r = call("node_replicate_onion", token=token)
+check("replicate_onion без tor → error", "error" in r, r)
+
 print(f"\nE2E SMOKE: {len(ok)}/{len(ok)} проверок прошли")

@@ -78,3 +78,8 @@ nexxusd            # слушает P2P 127.0.0.1:4001, Local API 127.0.0.1:4010
 - `node_gc` и `node_policy_apply` — bulk/destructive, требуют `{"confirm": true}` (POL-01).
 - Bootstrap-списки: опциональный pin — `bootstrap_registry_pub` в `node.conf` (env `NEXXUS_BOOTSTRAP_REGISTRY_PUB`, hex64). Если задан, envelope с другим `registry_pub` отклоняется (BS-01, закрывает trust-on-first-use).
 - API onion (`NEXXUS_API_ONION=1`): токен + onion URL дают полный доступ к API — рассматривайте onion-адрес как секрет, равный токену (расширяет blast radius за пределы localhost).
+
+### Onion-only репликация (E6)
+- Политика `{"action": "onion-only"}` по префиксу имени: чанки помечаются флагом `onion_only` и всегда pinned; при upload они **не** отсылаются clearnet-пирам из routing table.
+- `node_chunk_onion_only {"hash": "<hex64>", "on": true}` — ручной флаг; `node_onion_only_list` — список.
+- `node_replicate_onion` — разослать все onion-only чанки на `.onion`-адреса из signed bootstrap-списка через Tor (нужен `NEXXUS_TOR=1` и установленный список).
