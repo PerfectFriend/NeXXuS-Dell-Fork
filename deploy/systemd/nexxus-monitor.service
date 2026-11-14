@@ -13,7 +13,7 @@ Environment="WAYLAND_DISPLAY=wayland-0"
 #   ~/.hermes/secrets/nexxus_chat_id       — chat id для отчётов
 # или через env: NEXXUS_TG_BOT_TOKEN / NEXXUS_TG_CHAT_ID
 # (или ~/.config/environment.d/nexxus-monitor.env)
-ExecStart=/home/thomas/build/cache/cargo-target-nexxus/release/nexxus-desktop
+ExecStart=/home/thomas/.local/bin/nexxus-desktop
 # on-failure: при падении монитор перезапускается, а «Полное отключение»
 # (осознанный exit 0 из трея) остаётся выключенным.
 Restart=on-failure
