@@ -195,6 +195,9 @@ pub struct LocalApi {
     duress_wipe: std::sync::atomic::AtomicBool,
     /// API-01: семафор на число одновременных WebSocket соединений.
     ws_conns: std::sync::Arc<tokio::sync::Semaphore>,
+    /// BS-01: опциональный pin ожидаемого registry_pub (hex) для bootstrap-списков.
+    /// Если задан — envelope с другим registry_pub отклоняется (trust-on-first-use закрыт).
+    bootstrap_registry_pin: std::sync::Mutex<Option<String>>,
 }
 
 /// JSON-RPC error code: не пройдена аутентификация.
@@ -312,6 +315,7 @@ impl LocalApi {
             )),
             duress_wipe: std::sync::atomic::AtomicBool::new(false),
             ws_conns: std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_WS_CONNECTIONS)),
+            bootstrap_registry_pin: std::sync::Mutex::new(None),
             epoch_info: Arc::new(Mutex::new(EpochInfo {
                 epoch_number: 0,
                 merkle_root: hex::encode([0u8; 32]),
@@ -445,9 +449,8 @@ impl LocalApi {
             "node_policy_set" => self.handle_node_policy_set(req.params),
             "node_policy_list" => self.handle_node_policy_list(),
             "node_policy_delete" => self.handle_node_policy_delete(req.params),
-            "node_policy_apply" => self.handle_node_policy_apply(),
-            "node_gc" => self.handle_node_gc(),
-            "node_export_bundle" => self.handle_node_export_bundle(req.params),
+            "node_policy_apply" => self.handle_node_policy_apply(req.params),
+            "node_gc" => self.handle_node_gc(req.params),            "node_export_bundle" => self.handle_node_export_bundle(req.params),
             "node_import_bundle" => self.handle_node_import_bundle(req.params),
             "node_smp" => self.handle_node_smp().await,
             "node_smp_send" => self.handle_node_smp_send(req.params).await,
@@ -1039,11 +1042,25 @@ impl LocalApi {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        // BS-01: если в конфиге задан pin registry_pub — проверяем до store_set.
+        if let Some(pin) = self.bootstrap_registry_pin.lock().unwrap().clone() {
+            if env.payload.registry_pub.to_lowercase() != pin {
+                crate::log_ev!("warn", "bootstrap.list.rejected_pin", "got" => &env.payload.registry_pub[..16.min(env.payload.registry_pub.len())]);
+                return Err(NexxusError::Io(
+                    "bootstrap registry_pub does not match pinned bootstrap_registry_pub".into(),
+                ));
+            }
+        }
         crate::bootstrap::store_set(&self.store, &env, now)?;
         crate::log_ev!("info", "bootstrap.list.accepted", "addrs" => env.payload.addrs.len(), "expiry_unix" => env.payload.expiry_unix);
         Ok(serde_json::json!({
             "ok": true, "addrs": env.payload.addrs.len(), "expiry_unix": env.payload.expiry_unix
         }))
+    }
+
+    /// BS-01: установить pin registry_pub (hex64, lowercase). None = без pin.
+    pub fn set_bootstrap_registry_pin(&self, hex: Option<String>) {
+        *self.bootstrap_registry_pin.lock().unwrap() = hex.map(|h| h.to_lowercase());
     }
 
     /// E6 policies: установить правило {id, name_prefix, action=pin|ttl:<secs>}.
@@ -1076,8 +1093,18 @@ impl LocalApi {
         Ok(serde_json::json!({ "ok": true, "id": id }))
     }
 
-    /// E6 policies: применить все правила к существующим именам (pin/ttl чанков).
-    fn handle_node_policy_apply(&self) -> Result<Value, NexxusError> {
+    /// E6 policies: применить все правила к существующим именам (pin/ttl chancей).
+    /// POL-01: bulk-операция, требует confirm=true.
+    fn handle_node_policy_apply(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let confirmed = params
+            .as_ref()
+            .and_then(|p| p.get("confirm").and_then(|v| v.as_bool()))
+            .unwrap_or(false);
+        if !confirmed {
+            return Err(NexxusError::Io(
+                "policy_apply is bulk: pass {\"confirm\": true}".into(),
+            ));
+        }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -1103,12 +1130,23 @@ impl LocalApi {
     }
 
     /// E2 retention: delete all expired unpinned chunks now.
-    fn handle_node_gc(&self) -> Result<Value, NexxusError> {
+    /// POL-01: GC — bulk-удаление, требует confirm=true (симметрия с backup_delete).
+    fn handle_node_gc(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let confirmed = params
+            .as_ref()
+            .and_then(|p| p.get("confirm").and_then(|v| v.as_bool()))
+            .unwrap_or(false);
+        if !confirmed {
+            return Err(NexxusError::Io(
+                "gc is destructive: pass {\"confirm\": true}".into(),
+            ));
+        }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let deleted = self.store.gc_expired(now)?;
+        crate::log_ev!("warn", "gc.run", "deleted" => deleted);
         Ok(serde_json::json!({ "deleted": deleted }))
     }
 

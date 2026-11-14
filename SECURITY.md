@@ -1,5 +1,11 @@
 # Security Policy — NeXXus-Node-Hermes-Rust
 
+## Self-update (G4) — operational notes (Re-Audit #4)
+
+- **UPD-02 (closed):** `nexxusd update` прогоняет signature-verified кандидат через `--version` и **отказывается устанавливать версию <= текущей** (anti-rollback, `check_not_downgrade` в `update.rs`, юнит-тесты).
+- **UPD-01 (documented):** скачивание идёт через системный `curl` (TLS trust store хоста). Долгосрочно — in-process rustls; до тех пор оператор должен гарантировать чистый PATH и доверенный CA bundle.
+- **UPD-03 (documented):** release-ассеты собираются CI из squash-mirror/тега; дефолтный URL ведёт на GitHub releases репозитория. Канонический артефакт раздачи — squash-mirror (см. DEP-03).
+
 ## Reporting
 
 RC1 re-audit (Grok, 2026-11-12, through `d69647f`): all previous Medium+

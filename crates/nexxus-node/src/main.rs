@@ -70,9 +70,10 @@ fn main() {
     // test-por/test-interhost/logs/benchmark — обрабатываются в cli::run.
     // Всё остальное (или `serve`) — запуск демона; позиционный аргумент —
     // путь к файлу хранилища redb (по умолчанию ~/.nexxus/store.redb).
-    const CLI_CMDS: [&str; 13] = [
+    const CLI_CMDS: [&str; 14] = [
         "init", "id", "status", "peers", "peer", "upload", "download",
         "test-por", "test-interhost", "logs", "benchmark", "update", "light",
+        "--version",
     ];
     let args: Vec<String> = env::args().skip(1).collect();
     if args
@@ -204,6 +205,14 @@ fn main() {
 
         // --- Локальное WebSocket API ---
         let api = Arc::new(LocalApi::new(Arc::clone(&net), Arc::clone(&store)));
+
+        // BS-01: опциональный pin registry_pub для signed bootstrap-списков
+        // (node.conf: bootstrap_registry_pub / env: NEXXUS_BOOTSTRAP_REGISTRY_PUB).
+        let reg_pin = crate::node_config::cfg_or_env(&conf, "bootstrap_registry_pub", "NEXXUS_BOOTSTRAP_REGISTRY_PUB", "");
+        if !reg_pin.is_empty() {
+            api.set_bootstrap_registry_pin(Some(reg_pin));
+            println!("nexxusd: bootstrap registry_pub pinned");
+        }
 
         // --- Токен доступа к API (fail-closed): без токена API не стартует ---
         let token_path = api_auth::token_file_path();

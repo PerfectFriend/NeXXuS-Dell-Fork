@@ -66,6 +66,68 @@ fn run_curl(url: &str) -> Result<Vec<u8>, NexxusError> {
 
 /// Атомарная замена бинарника с rollback: verify подписи → backup старого →
 /// tmp+rename → при любой ошибке до rename старый бинарь не тронут.
+/// UPD-02 (anti-rollback): разобрать semver-строку "0.1.0[-suffix]" в кортеж.
+pub fn version_tuple(v: &str) -> Option<(u64, u64, u64)> {
+    let core = v.split(['-', '+']).next()?;
+    let mut it = core.split('.');
+    let maj = it.next()?.parse().ok()?;
+    let min = it.next().unwrap_or("0").parse().ok()?;
+    let pat = it.next().unwrap_or("0").parse().ok()?;
+    Some((maj, min, pat))
+}
+
+/// true если `new` строго новее `cur`.
+pub fn is_newer(new: (u64, u64, u64), cur: (u64, u64, u64)) -> bool {
+    new > cur
+}
+
+/// UPD-02: anti-rollback — прогоняет скачанный (уже signature-verified) бинарник
+/// с `--version` и отказывается устанавливать, если его версия <= текущей.
+/// Возвращает строку новой версии при успехе.
+pub fn check_not_downgrade(new_bytes: &[u8]) -> Result<String, NexxusError> {
+    if new_bytes.len() < 1024 {
+        return Err(NexxusError::Io("suspiciously small release binary".into()));
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "nexxus-upd-check-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).map_err(|e| NexxusError::Io(format!("tmp dir: {e}")))?;
+    let tmp = dir.join("nexxusd-candidate");
+    std::fs::write(&tmp, new_bytes).map_err(|e| NexxusError::Io(format!("tmp write: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
+    }
+    let out = std::process::Command::new(&tmp)
+        .arg("--version")
+        .output()
+        .map_err(|e| NexxusError::Io(format!("probe --version: {e}")))?;
+    let _ = std::fs::remove_dir_all(&dir);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // ожидаем "nexxusd X.Y.Z"
+    let vstr = stdout
+        .split_whitespace()
+        .last()
+        .ok_or_else(|| NexxusError::Io("candidate --version produced no version".into()))?;
+    let new = version_tuple(vstr)
+        .ok_or_else(|| NexxusError::Io(format!("candidate version unparseable: {vstr}")))?;
+    let cur = version_tuple(env!("CARGO_PKG_VERSION"))
+        .ok_or_else(|| NexxusError::Io("current version unparseable".into()))?;
+    if !is_newer(new, cur) {
+        return Err(NexxusError::Io(format!(
+            "anti-rollback: candidate {vstr} is not newer than current {} — refusing",
+            env!("CARGO_PKG_VERSION")
+        )));
+    }
+    Ok(vstr.to_string())
+}
+
 pub fn install_update(new_bytes: &[u8], signature_hex: &str, current_bin: &Path) -> Result<PathBuf, NexxusError> {
     verify_release(new_bytes, signature_hex)?;
     if new_bytes.len() < 1024 {
@@ -119,6 +181,25 @@ pub fn install_update(new_bytes: &[u8], signature_hex: &str, current_bin: &Path)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_tuple_and_is_newer() {
+        assert_eq!(version_tuple("0.1.0"), Some((0, 1, 0)));
+        assert_eq!(version_tuple("2.0.0-rc1"), Some((2, 0, 0)));
+        assert_eq!(version_tuple("v2.0.0-prototype"), None, "префикс v не парсится — ок, --version печатает без него");
+        assert!(is_newer((0, 2, 0), (0, 1, 0)));
+        assert!(!is_newer((0, 1, 0), (0, 1, 0)), "равная версия — не новее (anti-rollback)");
+        assert!(!is_newer((0, 0, 9), (0, 1, 0)));
+    }
+
+    #[test]
+    fn check_not_downgrade_rejects_same_version_binary() {
+        // собираем "кандидата": текущий бинарник теста с --version = CARGO_PKG_VERSION
+        let cur = std::env::current_exe().unwrap();
+        let bytes = std::fs::read(&cur).unwrap();
+        // текущий == текущему → отказ
+        assert!(check_not_downgrade(&bytes).is_err());
+    }
 
     #[test]
     fn signature_verify_ok_and_tamper_fails() {

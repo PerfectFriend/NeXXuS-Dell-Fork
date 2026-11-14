@@ -71,3 +71,10 @@ nexxusd            # слушает P2P 127.0.0.1:4001, Local API 127.0.0.1:4010
   bot-токены, risk-accepted владельцем; рецепт: `docs/DEP-03-secret-rotation.md`)
 - Threat model: `docs/THREAT_MODEL.md`; серия аудитов: `docs/audits/`
 - Точка входа для ревьюеров: `AUDITOR.md`
+
+### Re-Audit #4 hardening
+- `nexxusd --version` — печать версии (нужна для anti-rollback self-update).
+- `nexxusd update` теперь отказывается ставить версию <= текущей (UPD-02, anti-rollback).
+- `node_gc` и `node_policy_apply` — bulk/destructive, требуют `{"confirm": true}` (POL-01).
+- Bootstrap-списки: опциональный pin — `bootstrap_registry_pub` в `node.conf` (env `NEXXUS_BOOTSTRAP_REGISTRY_PUB`, hex64). Если задан, envelope с другим `registry_pub` отклоняется (BS-01, закрывает trust-on-first-use).
+- API onion (`NEXXUS_API_ONION=1`): токен + onion URL дают полный доступ к API — рассматривайте onion-адрес как секрет, равный токену (расширяет blast radius за пределы localhost).

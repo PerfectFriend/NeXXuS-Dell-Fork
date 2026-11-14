@@ -181,6 +181,10 @@ async fn async_main(args: Vec<String>) -> i32 {
         // nexxusd light status | get <root-hex> <out> | pin <hash> | chunks
         // api/token: --api host:port / --token-file path, либо NEXXUS_API_ADDR / NEXXUS_API_TOKEN_FILE
         "light" => cmd_light(&rest).await,
+        "--version" => {
+            println!("nexxusd {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
         "peers" => print_result(ws_call("node_peers", json!({})).await),
         "peer" => match rest.first().map(|s| s.as_str()) {
             Some("add") => match rest.get(1) {
@@ -279,6 +283,14 @@ fn cmd_update(rest: &[String]) -> i32 {
         return 1;
     }
     println!("update: signature OK ({} bytes)", bytes.len());
+    // UPD-02: anti-rollback — кандидат должен быть строго новее текущей версии.
+    match crate::update::check_not_downgrade(&bytes) {
+        Ok(v) => println!("update: candidate version {v} > current {} — OK", env!("CARGO_PKG_VERSION")),
+        Err(e) => {
+            eprintln!("update: {e} — бинарник НЕ заменён");
+            return 1;
+        }
+    }
     if check_only {
         println!("update --check: OK, бинарник не менялся");
         return 0;

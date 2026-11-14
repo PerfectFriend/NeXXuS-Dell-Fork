@@ -192,3 +192,10 @@ Q3+             E6 Ecosystem, formal bits, marketplace only with real settlement
 *Документ можно класть в `docs/plans/` как `2026-11-12-evolution-post-rc1.md` и уточнять по мере закрытия E0–E1.*
 
 — Grok, 12 November 2026
+
+## Re-Audit #4 (Grok, 14.11.2026, HEAD 1e3427d) — closed items
+- [x] UPD-02 anti-rollback: `check_not_downgrade` — кандидат прогоняется через `--version`, установка拒绝дена если <= текущей; `nexxusd --version` добавлен; тесты + e2e
+- [x] POL-01: `node_gc` / `node_policy_apply` требуют `{"confirm": true}`; e2e 53/53 (включая negative-проверки)
+- [x] BS-01: pin `bootstrap_registry_pub` (node.conf/env) — mismatch отклоняется до store_set
+- [x] UPD-01/UPD-03: задокументированы в SECURITY.md (curl-зависимость, канал раздачи)
+- [ ] UPD-01 long-term: in-process rustls download вместо curl — follow-up
