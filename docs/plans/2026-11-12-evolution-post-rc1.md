@@ -55,7 +55,7 @@
 | Reputation / soft-score пиров | RES-05: сейчас полный стол → reject новых | Балл за uptime, успешные PoR, возраст; eviction по score, не только «первый пришёл» |
 | Метрики Prometheus / JSON | Мониторинг без Telegram | `/metrics` только на localhost или по токену |
 | Structured logging | Разбор инцидентов | Без мнемоник и токенов в логах (уже принцип — закрепить тестом) |
-| Connection quality hints | RTT, loss | Для выбора реплик |
+| Connection quality hints | RTT per peer: node_ping_peer + EWMA rtt_ms в PeerScore, UI-кнопка Ping — ✅ DONE | loss — нет (нужен счётчик retransmit, отдельно) |
 | Опциональный STUN / hole-punching | Lab без Tor | Не ломать onion-профиль |
 
 **Безопасность:** score не должен стать вектором «накрутил и вытеснил честных» — пороги + decay, документировать.

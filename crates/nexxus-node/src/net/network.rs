@@ -188,6 +188,10 @@ pub struct PeerScore {
     pub success: u64,
     pub fail: u64,
     pub last_seen_unix: u64,
+    /// E1 connection-quality hint: last measured RTT in milliseconds
+    /// (EWMA over pings; 0 = never measured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<u64>,
 }
 
 impl PeerScore {
@@ -378,6 +382,21 @@ impl P2pNetwork {
         } else {
             e.fail = e.fail.saturating_add(1);
         }
+        e.last_seen_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+    }
+
+    /// E1: record measured RTT for a peer (EWMA, alpha=1/4).
+    pub fn note_peer_rtt(&self, addr: SocketAddr, rtt: std::time::Duration) {
+        let ms = rtt.as_millis() as u64;
+        let mut scores = self.peer_scores.lock().unwrap();
+        let e = scores.entry(addr).or_default();
+        e.rtt_ms = Some(match e.rtt_ms {
+            None => ms,
+            Some(prev) => prev / 4 * 3 + ms / 4,
+        });
         e.last_seen_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -1152,6 +1171,20 @@ mod tests {
     /// Real SHA-256 of the payload — put_chunk verifies hash == SHA-256(data).
     fn h(data: &[u8]) -> ChunkHash {
         ChunkHash(sha2::Sha256::digest(data).into())
+    }
+
+    #[test]
+    fn peer_rtt_ewma_smooths() {
+        let addr: SocketAddr = "127.0.0.1:4001".parse().unwrap();
+        // P2pNetwork::new нужен только для поля peer_scores; берём минимальный
+        let dir = tempdir().unwrap();
+        let store = Arc::new(ChunkStore::open(dir.path().join("s.redb")).unwrap());
+        let net = P2pNetwork::new(NodeId([1u8; 32]), "127.0.0.1:0".parse().unwrap(), store);
+        net.note_peer_rtt(addr, std::time::Duration::from_millis(100));
+        assert_eq!(net.peer_scores.lock().unwrap().get(&addr).unwrap().rtt_ms, Some(100));
+        net.note_peer_rtt(addr, std::time::Duration::from_millis(200));
+        // EWMA: 100/4*3 + 200/4 = 75 + 50 = 125
+        assert_eq!(net.peer_scores.lock().unwrap().get(&addr).unwrap().rtt_ms, Some(125));
     }
 
 

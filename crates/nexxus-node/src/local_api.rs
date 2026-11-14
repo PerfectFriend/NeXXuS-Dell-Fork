@@ -431,6 +431,7 @@ impl LocalApi {
             "node_status" => self.handle_node_status().await,
             "node_metrics" => self.handle_node_metrics(),
             "node_peers" => self.handle_node_peers().await,
+            "node_ping_peer" => self.handle_node_ping_peer(req.params).await,
             "node_chunks" => self.handle_node_chunks().await,
             "node_chunk_pin" => self.handle_node_chunk_pin(req.params, true),
             "node_chunk_unpin" => self.handle_node_chunk_pin(req.params, false),
@@ -878,6 +879,25 @@ impl LocalApi {
             v["disk_free_bytes"] = Value::from(avail);
         }
         Ok(v)
+    }
+
+    /// E1 connection-quality hint: ping one peer, record EWMA RTT into its
+    /// PeerScore (surfaced via node_peers score_detail.rtt_ms).
+    async fn handle_node_ping_peer(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let addr_s = params
+            .as_ref()
+            .and_then(|p| p.get("addr"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NexxusError::Io("param 'addr' required".into()))?;
+        let addr: SocketAddr = addr_s
+            .parse()
+            .map_err(|e| NexxusError::Io(format!("bad addr '{addr_s}': {e}")))?;
+        let rtt = self.network.ping(addr).await?;
+        self.network.note_peer_rtt(addr, rtt);
+        Ok(serde_json::json!({
+            "addr": addr_s,
+            "rtt_ms": rtt.as_millis() as u64,
+        }))
     }
 
     async fn handle_node_peers(&self) -> Result<Value, NexxusError> {

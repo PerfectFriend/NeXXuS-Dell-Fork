@@ -364,10 +364,23 @@ async function refreshPeers() {
       score: x.score ?? (x.score_detail ? x.score_detail.score : '—'),
       success: x.score_detail?.success ?? '—',
       fail: x.score_detail?.fail ?? '—',
+      rtt_ms: x.score_detail?.rtt_ms ?? '—',
+      ping: x.addr ? '▶' : '',
     })));
   } catch (e) {
     setBox('peers-list', `ошибка: ${e}`);
   }
+}
+
+/// E1: ping выбранного пира (адрес из input-connect), RTT уходит в score.
+async function pingPeer() {
+  const addr = ($('input-connect').value || '').trim();
+  if (!addr) {
+    addStageLog('Укажите адрес пира для ping', 'error');
+    return;
+  }
+  const r = await action(`Ping ${addr}`, () => api('node_ping_peer', { addr }));
+  if (r) refreshPeers();
 }
 
 async function pauseNode() {
@@ -691,6 +704,7 @@ $('btn-peers-refresh').addEventListener('click', refreshPeers);
 $('btn-pause').addEventListener('click', pauseNode);
 $('btn-resume').addEventListener('click', resumeNode);
 $('btn-connect').addEventListener('click', connectPeer);
+$('btn-ping').addEventListener('click', pingPeer);
 
 $('btn-chunks-refresh').addEventListener('click', refreshChunks);
 $('btn-smp-refresh').addEventListener('click', refreshSmp);
