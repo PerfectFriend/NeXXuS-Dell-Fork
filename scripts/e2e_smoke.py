@@ -51,7 +51,7 @@ def check(name, cond, extra=""):
     ok.append(name)
     print(f"  ✅ {name}")
 
-token = open(os.path.expanduser("~/.hermes/cache/scratch/e2e-node/api.token")).read().strip() if os.path.exists(os.path.expanduser("~/.hermes/cache/scratch/e2e-node/api.token")) else None
+token = open(os.path.expanduser("~/.nexxus/api.token")).read().strip() if os.path.exists(os.path.expanduser("~/.nexxus/api.token")) else None
 
 # token читается из data dir? nexxusd пишет в ~/.nexxus/api.token — для чистоты читаем оттуда
 print("== auth ==")
@@ -160,5 +160,23 @@ check("smp история содержит sent", any(m["direction"] == "sent" f
 print("== PoR ==")
 r = call("node_por", token=token)
 check("node_por отвечает", "result" in r or "error" in r, r)
+
+print("== E2 names/versioning ==")
+h1 = "11" * 32
+h2 = "22" * 32
+nm = f"e2edoc-{os.getpid()}"
+r = call("node_name_set", {"name": nm, "hash": h1}, token=token)
+check("name_set v1", "result" in r, r)
+r = call("node_name_set", {"name": nm, "hash": h2}, token=token)
+check("name_set v2", "result" in r, r)
+r = call("node_name_get", {"name": nm}, token=token)
+check("name_get → v2", r.get("result", {}).get("hash") == h2, r)
+r = call("node_name_history", {"name": nm}, token=token)
+hist = r.get("result", {}).get("history", [])
+check("history 2 записи [v1,v2]", [x["hash"] for x in hist] == [h1, h2], r)
+r = call("node_name_list", token=token)
+check("name_list содержит e2edoc", nm in r.get("result", {}).get("names", []), r)
+r = call("node_name_set", {"name": "bad:name", "hash": h1}, token=token)
+check("name с ':' → error", "error" in r, r)
 
 print(f"\nE2E SMOKE: {len(ok)}/{len(ok)} проверок прошли")

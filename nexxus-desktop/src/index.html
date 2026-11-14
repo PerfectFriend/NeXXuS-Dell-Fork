@@ -157,7 +157,16 @@
             <button class="btn btn-outline" id="btn-smp-refresh">🧩 SMP inbox</button>
             <button class="btn btn-outline" id="btn-por">🔍 PoR-проверка</button>
             <button class="btn btn-outline" id="btn-store-info">🗄 Инфо о сторе</button>
+            <button class="btn btn-outline" id="btn-names-refresh">🏷 Имена</button>
           </div>
+          <div class="row-inline">
+            <input id="name-key" placeholder="имя (например doc)">
+            <input id="name-hash" placeholder="hash (hex 64) для set">
+            <button class="btn btn-primary" id="btn-name-set">💾 Set</button>
+            <button class="btn" id="btn-name-get">👁 Get</button>
+            <button class="btn" id="btn-name-history">🕘 История</button>
+          </div>
+          <div id="names-data" class="data-box" style="display:none">—</div>
           <div id="storage-data" class="data-box">—</div>
           <div id="smp-inbox" class="smp-inbox" style="display:none">
             <h3>🧩 SMP inbox</h3>

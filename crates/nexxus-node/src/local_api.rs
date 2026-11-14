@@ -436,6 +436,10 @@ impl LocalApi {
             "node_chunk_pin" => self.handle_node_chunk_pin(req.params, true),
             "node_chunk_unpin" => self.handle_node_chunk_pin(req.params, false),
             "node_chunk_ttl" => self.handle_node_chunk_ttl(req.params),
+            "node_name_set" => self.handle_node_name_set(req.params),
+            "node_name_get" => self.handle_node_name_get(req.params),
+            "node_name_history" => self.handle_node_name_history(req.params),
+            "node_name_list" => self.handle_node_name_list(),
             "node_gc" => self.handle_node_gc(),
             "node_export_bundle" => self.handle_node_export_bundle(req.params),
             "node_import_bundle" => self.handle_node_import_bundle(req.params),
@@ -965,6 +969,57 @@ impl LocalApi {
             .unwrap_or(0);
         let exp = self.store.set_chunk_ttl(&hash, ttl, now)?;
         Ok(serde_json::json!({ "hash": hex::encode(hash.0), "ttl_secs": ttl, "expires_unix": exp }))
+    }
+
+    /// E2 versioning: name_set — указатель name → hash, запись в историю.
+    fn handle_node_name_set(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let name = params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NexxusError::Io("param 'name' required".into()))?;
+        let hash = parse_hash_param(params.clone())?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        self.store.name_set(name, &hash, now)?;
+        Ok(serde_json::json!({ "name": name, "hash": hex::encode(hash.0), "ts_ns": now }))
+    }
+
+    /// E2 versioning: текущий указатель name.
+    fn handle_node_name_get(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let name = params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NexxusError::Io("param 'name' required".into()))?;
+        let h = self.store.name_get(name)?;
+        Ok(serde_json::json!({
+            "name": name,
+            "hash": h.map(|h| hex::encode(h.0)),
+        }))
+    }
+
+    /// E2 versioning: история указаний name [(ts, hash)].
+    fn handle_node_name_history(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let name = params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NexxusError::Io("param 'name' required".into()))?;
+        let hist = self
+            .store
+            .name_history(name)?
+            .into_iter()
+            .map(|(ts, h)| serde_json::json!({ "ts_ns": ts, "hash": hex::encode(h.0) }))
+            .collect::<Vec<_>>();
+        Ok(serde_json::json!({ "name": name, "history": hist }))
+    }
+
+    /// E2 versioning: список всех имён.
+    fn handle_node_name_list(&self) -> Result<Value, NexxusError> {
+        Ok(serde_json::json!({ "names": self.store.name_list()? }))
     }
 
     /// E2 retention: delete all expired unpinned chunks now.

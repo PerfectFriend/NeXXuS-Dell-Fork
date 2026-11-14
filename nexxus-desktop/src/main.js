@@ -710,7 +710,43 @@ $('btn-chunks-refresh').addEventListener('click', refreshChunks);
 $('btn-smp-refresh').addEventListener('click', refreshSmp);
 $('btn-smp-send').addEventListener('click', sendSmp);
 $('btn-por').addEventListener('click', runPor);
+// E2 versioning: именованные указатели с историей
+async function nameList() {
+  try {
+    const r = await api('node_name_list');
+    showNames({ names: r.names });
+  } catch (e) { showNames({ error: String(e) }); }
+}
+async function nameSet() {
+  const name = $('name-key').value.trim();
+  const hash = $('name-hash').value.trim();
+  if (!name || !/^[0-9a-fA-F]{64}$/.test(hash)) { showNames({ error: 'нужно имя + hash(64 hex)' }); return; }
+  try { showNames(await api('node_name_set', { name, hash: hash.toLowerCase() })); }
+  catch (e) { showNames({ error: String(e) }); }
+}
+async function nameGet() {
+  const name = $('name-key').value.trim();
+  if (!name) { showNames({ error: 'укажи имя' }); return; }
+  try { showNames(await api('node_name_get', { name })); }
+  catch (e) { showNames({ error: String(e) }); }
+}
+async function nameHistory() {
+  const name = $('name-key').value.trim();
+  if (!name) { showNames({ error: 'укажи имя' }); return; }
+  try { showNames(await api('node_name_history', { name })); }
+  catch (e) { showNames({ error: String(e) }); }
+}
+function showNames(obj) {
+  const el = $('names-data');
+  el.style.display = 'block';
+  el.textContent = JSON.stringify(obj, null, 2);
+}
+
 $('btn-store-info').addEventListener('click', storeInfo);
+$('btn-names-refresh').addEventListener('click', nameList);
+$('btn-name-set').addEventListener('click', nameSet);
+$('btn-name-get').addEventListener('click', nameGet);
+$('btn-name-history').addEventListener('click', nameHistory);
 
 $('btn-logs-refresh').addEventListener('click', refreshLogs);
 $('btn-logs-live').addEventListener('click', toggleLogsLive);

@@ -43,6 +43,7 @@ nexxusd            # слушает P2P 127.0.0.1:4001, Local API 127.0.0.1:4010
   `node_metrics`, `node_gc`; selftest (`selftest_cmd`) покрывает все read-only методы
 - Disk cap: `NEXXUS_MAX_STORE_BYTES` (0 = без лимита)
 - Ретенция чанков: TTL/pin/unpin (`node_chunk_ttl`, `node_chunk_pin`, `node_gc`)
+- Именованные указатели с версионированием: `node_name_set` / `node_name_get` / `node_name_history` / `node_name_list` (в UI — панель «Хранилище → Имена»)
 - Cold backup: `node_export_bundle` / `node_import_bundle` (зашифрованный PIN-ом
   bundle вне redb, импорт с `confirm: true` и path только внутри `bundles/`)
 - Fleet: узлы в `~/.nexxus/nodes/<name>.conf` + `<name>.token`, переключение в UI монитора

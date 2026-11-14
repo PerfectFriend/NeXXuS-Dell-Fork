@@ -498,6 +498,65 @@ impl ChunkStore {
         Ok(out)
     }
 
+    /// E2 versioning: установить именованный указатель name → hash (с историей).
+    /// Текущее значение — meta "name:<name>"; запись в историю — "namehist:<name>:<nanos>".
+    pub fn name_set(&self, name: &str, hash: &ChunkHash, now_ns: u64) -> Result<(), NexxusError> {
+        if name.is_empty() || name.len() > 128 || name.contains(':') {
+            return Err(NexxusError::Io("bad name (empty/>128/':')".into()));
+        }
+        let cur = format!("name:{name}");
+        let hist = format!("namehist:{name}:{now_ns:020}");
+        let wtx = self
+            .db
+            .begin_write()
+            .map_err(|e| NexxusError::Io(format!("redb write tx: {e}")))?;
+        {
+            let mut table = wtx
+                .open_table(META)
+                .map_err(|e| NexxusError::Io(format!("redb table: {e}")))?;
+            table
+                .insert(cur.as_str(), &hash.0[..])
+                .map_err(|e| NexxusError::Io(format!("redb insert: {e}")))?;
+            table
+                .insert(hist.as_str(), &hash.0[..])
+                .map_err(|e| NexxusError::Io(format!("redb insert: {e}")))?;
+        }
+        wtx.commit()
+            .map_err(|e| NexxusError::Io(format!("redb commit: {e}")))?;
+        Ok(())
+    }
+
+    /// E2: текущий указатель name → hash (или None).
+    pub fn name_get(&self, name: &str) -> Result<Option<ChunkHash>, NexxusError> {
+        let v = self.get_meta(&format!("name:{name}"))?;
+        Ok(v.and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok().map(ChunkHash)))
+    }
+
+    /// E2: история указаний name — Vec<(ts_nanos, hash)>, по возрастанию.
+    pub fn name_history(&self, name: &str) -> Result<Vec<(u64, ChunkHash)>, NexxusError> {
+        let prefix = format!("namehist:{name}:");
+        let mut out = Vec::new();
+        for (k, v) in self.list_meta_prefix(&prefix)? {
+            let ts = k[prefix.len()..].parse::<u64>().unwrap_or(0);
+            if let Ok(b) = <[u8; 32]>::try_from(v.as_slice()) {
+                out.push((ts, ChunkHash(b)));
+            }
+        }
+        out.sort_by_key(|(ts, _)| *ts);
+        Ok(out)
+    }
+
+    /// E2: список всех имён (без истории).
+    pub fn name_list(&self) -> Result<Vec<String>, NexxusError> {
+        let mut out: Vec<String> = self
+            .list_meta_prefix("name:")?
+            .into_iter()
+            .map(|(k, _)| k["name:".len()..].to_string())
+            .collect();
+        out.sort();
+        Ok(out)
+    }
+
     fn delete_meta(&self, key: &str) -> Result<(), NexxusError> {
         let wtx = self
             .db
@@ -521,6 +580,31 @@ impl ChunkStore {
 mod tests {
     use super::*;
     use sha2::Digest;
+
+    /// E2 versioning: name_set/get/history/list на живом store.
+    #[test]
+    fn name_versioning_history() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexxus-test-name-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let st = ChunkStore::open(&dir).unwrap();
+        let h1 = h(b"v1");
+        let h2 = h(b"v2");
+        st.name_set("doc", &h1, 100).unwrap();
+        st.name_set("doc", &h2, 200).unwrap();
+        assert_eq!(st.name_get("doc").unwrap(), Some(h2));
+        let hist = st.name_history("doc").unwrap();
+        assert_eq!(hist, vec![(100, h1), (200, h2)]);
+        assert_eq!(st.name_list().unwrap(), vec!["doc".to_string()]);
+        assert!(st.name_set("a:b", &h1, 1).is_err(), "':' в имени запрещён");
+        drop(st);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Real SHA-256 of the payload — put_chunk verifies hash == SHA-256(data).
     fn h(data: &[u8]) -> ChunkHash {
