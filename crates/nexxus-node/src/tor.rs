@@ -132,3 +132,24 @@ mod imp {
 
 #[cfg(feature = "tor")]
 pub use imp::TorSession;
+
+#[cfg(all(test, feature = "tor"))]
+mod tor_integration {
+    //! E5: opt-in integration test — реальный bootstrap arti и публикация
+    //! onion v3 сервиса. Не входит в обычный `cargo test` (#[ignore]),
+    //! гоняется отдельным CI job: `cargo test -p nexxus-node --features tor -- --ignored`.
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "требует сети Tor; запускается только в CI job tor-integration"]
+    async fn bootstrap_and_publish_onion_v3() {
+        let mut sess = TorSession::new().await.expect("tor bootstrap");
+        let onion = sess
+            .publish_onion("127.0.0.1:4001".parse().unwrap())
+            .await
+            .expect("publish onion");
+        assert!(onion.ends_with(".onion"), "bad onion addr: {onion}");
+        assert_eq!(onion.len(), 56 + 6, "v3 onion = 56 base32 + .onion");
+        assert_eq!(sess.our_onion(), Some(onion.as_str()));
+    }
+}

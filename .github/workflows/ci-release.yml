@@ -256,6 +256,24 @@ jobs:
           name: nexxusd-windows
           path: target/x86_64-pc-windows-gnu/release/nexxusd.exe
 
+  tor-integration:
+    name: Tor integration (opt-in, real onion publish)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run ignored tor integration test
+        run: cargo test --release -p nexxus-node --features tor -- --ignored --nocapture
+        timeout-minutes: 15
+
   release:
     name: Create GitHub Release
     needs: [ build-and-test, rust, rust-tor, desktop, deb, appimage, android, windows ]

@@ -115,7 +115,7 @@
 
 ### Фаза E5 — «Приватность и транспорт» (по мере готовности E1)
 
-- Tor: хранение onion-ключа, bootstrap, `NEXXUS_TOR=0` уже есть — добавить integration test (opt-in в CI)
+- Tor: onion-ключ/bootstrap есть; ✅ DONE integration test (#[ignore], CI job tor-integration, реальный publish onion v3)
 - Опциональный second transport (QUIC?) — только если не ломает v3 framing abstraction
 - Traffic analysis resistance: padding/timing — research track, не RC2 blocker
 
