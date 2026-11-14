@@ -90,7 +90,7 @@
 
 3. **Канал расчётов (отдельная веха)**  
    - Не вшивать в wire v3  
-   - Варианты: off-chain signed IOU → later settlement; или отдельный opcode family `0x2x`  
+   - ✅ DONE (doc): ADR-0009 — off-chain signed IOU (ed25519, nonce, expiry), транспорт вне wire v3; threat model секция 5; код — отдельным ADR после review
    - Платежи = новый документ PROTOCOL + threat model (двойная трата, griefing, spam)
 
 4. **Marketplace UI** — только после (1)+(3); иначе снова SIM.
