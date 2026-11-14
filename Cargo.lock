@@ -2432,6 +2432,7 @@ name = "nexxus-econ"
 version = "0.1.0"
 dependencies = [
  "nexxus-core",
+ "proptest",
  "thiserror 1.0.69",
 ]
 

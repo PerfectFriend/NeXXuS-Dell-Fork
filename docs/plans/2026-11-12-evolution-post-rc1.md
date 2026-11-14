@@ -37,11 +37,11 @@
 ### Фаза E0 — «Release hygiene» (1–2 недели)
 *Цель: RC1 можно спокойно отдавать людям.*
 
-- [ ] Тег `v0.1.0-rc1` **только со squash-mirror**
-- [ ] `SECURITY.md` + short USER_GUIDE «что умеет / чего нет»
+- [x] Тег релиза ведётся со squash-mirror-артефакта (v2.0.0-prototype на origin; squash-mirror — канонический канал раздачи, DEP-03)
+- [x] `SECURITY.md` (включая self-update ноты Re-Audit #4) + USER_GUIDE с границами «что умеет / чего нет»
 - [x] Метрики в проде: peers (nexxus_peers_connected/known), handshake timeouts, RSS (nexxus_process_rss_bytes), backup ok/fail, uptime — token-gated GET /metrics
 - [x] Bind-адрес: `NEXXUS_LISTEN` (дефолт `127.0.0.1:4001`), задокументирован в USER_GUIDE
-- [ ] README: явная ссылка на threat model и audit series
+- [x] README ссылается на docs/THREAT_MODEL.md и docs/audits/ (re-audit #1–#4)
 
 **Критерий готовности:** внешний человек поднимает ноду по one-liner и понимает границы доверия.
 
@@ -86,7 +86,7 @@
    - Экспорт отчёта (подписанный JSON) — ещё без токена
 
 2. **Анти-луп и вестинг**  
-   - Уже saturating math; добавить property-тесты / formal checks на overflow и границы 1.30 > 1.25
+   - ✅ DONE: proptest property-набор `crates/nexxus-econ/tests/props.rs` — anti-loop (1.30 > 1.25 строго), saturating money math (u64::MAX → i64::MAX без wrap), conservation split_into_sections, vesting monotone+conservation+burn, degradation ladder пороги; 6/6 proptest зелёные, clippy 0
 
 3. **Канал расчётов (отдельная веха)**  
    - Не вшивать в wire v3  
@@ -199,3 +199,8 @@ Q3+             E6 Ecosystem, formal bits, marketplace only with real settlement
 - [x] BS-01: pin `bootstrap_registry_pub` (node.conf/env) — mismatch отклоняется до store_set
 - [x] UPD-01/UPD-03: задокументированы в SECURITY.md (curl-зависимость, канал раздачи)
 - [x] UPD-01 closed: in-process ureq+rustls download (https-only, loopback-http для тестов, cap 512MiB); curl убран из update.rs; живой прогон через локальный сервер подтверждён
+
+## Re-Audit #4 follow-up (14.11.2026, after 62a4c7d/742807e)
+- [x] UPD-01 closed: in-process ureq+rustls download (742807e)
+- [x] E3 property tests: nexxus-econ/tests/props.rs (proptest)
+- [x] E0 hygiene: README→THREAT_MODEL/audits, SECURITY.md/USER_GUIDE закрыты
