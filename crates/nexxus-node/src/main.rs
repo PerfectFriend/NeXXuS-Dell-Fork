@@ -32,6 +32,7 @@ mod bundle;
 mod update;
 mod logging;
 mod bootstrap;
+mod node_config;
 
 use crate::net::P2pNetwork;
 use crate::storage::ChunkStore;
@@ -89,35 +90,38 @@ fn main() {
     .unwrap_or_else(|| cli::default_store().to_string_lossy().into_owned());
 
     // --- Адреса слушателей ---
+    // Единый конфиг с монитором: ~/.nexxus/node.conf (env перекрывает файл).
+    let conf = crate::node_config::load_file();
     // NEXXUS_LISTEN — адрес для P2P соединений (не для API).
-    let listen_addr: SocketAddr = env::var("NEXXUS_LISTEN")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| "127.0.0.1:4001".parse().unwrap());
+    let listen_addr: SocketAddr = crate::node_config::cfg_or_env(&conf, "listen", "NEXXUS_LISTEN", "127.0.0.1:4001")
+        .parse()
+        .unwrap_or_else(|_| "127.0.0.1:4001".parse().unwrap());
 
     // NEXXUS_API_ADDR — адрес для локального WebSocket API (для nexxus-desktop).
-    let api_addr: SocketAddr = env::var("NEXXUS_API_ADDR")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| crate::local_api::DEFAULT_API_ADDR.parse().unwrap());
+    // Дефолт 4010 единый для ноды и монитора.
+    let api_addr: SocketAddr = crate::node_config::cfg_or_env(
+        &conf,
+        "api",
+        "NEXXUS_API_ADDR",
+        crate::local_api::DEFAULT_API_ADDR,
+    )
+    .parse()
+    .unwrap_or_else(|_| crate::local_api::DEFAULT_API_ADDR.parse().unwrap());
 
     // --- Комитет аудиторов (фаза 4): NEXXUS_AUDITORS=hex,hex,... NEXXUS_THRESHOLD=M ---
     // Без реестра и порога кворум не достигается никогда (deny-by-default).
-    let auditor_keys: Vec<ed25519_dalek::VerifyingKey> = env::var("NEXXUS_AUDITORS")
-        .unwrap_or_default()
+    let auditor_keys: Vec<ed25519_dalek::VerifyingKey> = crate::node_config::cfg_or_env(&conf, "auditors", "NEXXUS_AUDITORS", "")
         .split(',')
         .filter_map(|s| hex::decode(s.trim()).ok())
         .filter_map(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
         .filter_map(|a| ed25519_dalek::VerifyingKey::from_bytes(&a).ok())
         .collect();
-    let threshold: usize = env::var("NEXXUS_THRESHOLD")
-        .ok()
-        .and_then(|s| s.parse().ok())
+    let threshold: usize = crate::node_config::cfg_or_env(&conf, "threshold", "NEXXUS_THRESHOLD", "0")
+        .parse()
         .unwrap_or(0);
     // Период epoch-цикла (секунды), для тестов можно уменьшить.
-    let epoch_secs: u64 = env::var("NEXXUS_EPOCH_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
+    let epoch_secs: u64 = crate::node_config::cfg_or_env(&conf, "epoch_secs", "NEXXUS_EPOCH_SECS", "300")
+        .parse()
         .unwrap_or(300);
 
     // --- Tokio runtime ---
