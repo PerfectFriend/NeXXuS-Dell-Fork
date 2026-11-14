@@ -198,4 +198,4 @@ Q3+             E6 Ecosystem, formal bits, marketplace only with real settlement
 - [x] POL-01: `node_gc` / `node_policy_apply` требуют `{"confirm": true}`; e2e 53/53 (включая negative-проверки)
 - [x] BS-01: pin `bootstrap_registry_pub` (node.conf/env) — mismatch отклоняется до store_set
 - [x] UPD-01/UPD-03: задокументированы в SECURITY.md (curl-зависимость, канал раздачи)
-- [ ] UPD-01 long-term: in-process rustls download вместо curl — follow-up
+- [x] UPD-01 closed: in-process ureq+rustls download (https-only, loopback-http для тестов, cap 512MiB); curl убран из update.rs; живой прогон через локальный сервер подтверждён

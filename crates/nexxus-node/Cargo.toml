@@ -48,6 +48,8 @@ tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter
 fs2 = "0.4"
 tokio-tungstenite = "0.21"
 futures-util = "0.3"
+# UPD-01: in-process HTTPS (rustls) для self-update — без зависимости от системного curl.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
 tempfile = "3"

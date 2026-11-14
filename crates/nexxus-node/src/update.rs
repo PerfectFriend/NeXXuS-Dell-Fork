@@ -40,28 +40,55 @@ pub fn verify_release(bytes: &[u8], signature_hex: &str) -> Result<(), NexxusErr
         .map_err(|_| NexxusError::Vault("release signature verification FAILED".into()))
 }
 
-/// Скачивание ассета и .sig через curl (без нового тяжёлого dep в daemon).
+/// UPD-01: скачивание ассета и .sig in-process через ureq+rustls (без curl/PATH).
+/// HTTPS обязателен; plain HTTP разрешён только для loopback (локальные тесты).
 pub fn download(url: &str) -> Result<(Vec<u8>, String), NexxusError> {
-    let bin = run_curl(url)?;
-    let sig = run_curl(&format!("{url}.sig"))
+    let bin = http_get(url)?;
+    let sig = http_get(&format!("{url}.sig"))
         .map_err(|e| NexxusError::Io(format!("signature download: {e}")))?;
-    let sig_text = String::from_utf8_lossy(&sig).into_owned();
+    let sig_text = String::from_utf8_lossy(&sig).trim().to_string();
     Ok((bin, sig_text))
 }
 
-fn run_curl(url: &str) -> Result<Vec<u8>, NexxusError> {
-    let out = std::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "120", url])
-        .output()
-        .map_err(|e| NexxusError::Io(format!("curl spawn: {e}")))?;
-    if !out.status.success() {
-        return Err(NexxusError::Io(format!(
-            "curl {} failed: {}",
-            url,
-            String::from_utf8_lossy(&out.stderr).trim()
-        )));
+/// Валидация URL: https всегда; http только для 127.0.0.1/localhost/[::1].
+pub fn validate_url(url: &str) -> Result<(), NexxusError> {
+    if let Some(rest) = url.strip_prefix("https://") {
+        if rest.is_empty() {
+            return Err(NexxusError::Io("empty host in url".into()));
+        }
+        Ok(())
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        let host = rest.split(['/', ':', '?']).next().unwrap_or("");
+        if host == "127.0.0.1" || host == "localhost" || host == "[::1]" {
+            Ok(())
+        } else {
+            Err(NexxusError::Io(
+                "plain http allowed only for loopback; use https".into(),
+            ))
+        }
+    } else {
+        Err(NexxusError::Io("url must start with https://".into()))
     }
-    Ok(out.stdout)
+}
+
+const MAX_DOWNLOAD_BYTES: usize = 512 * 1024 * 1024;
+
+fn http_get(url: &str) -> Result<Vec<u8>, NexxusError> {
+    use std::io::Read;
+    validate_url(url)?;
+    let resp = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(120))
+        .call()
+        .map_err(|e| NexxusError::Io(format!("GET {url}: {e}")))?;
+    let mut buf = Vec::new();
+    resp.into_reader()
+        .take((MAX_DOWNLOAD_BYTES + 1) as u64)
+        .read_to_end(&mut buf)
+        .map_err(|e| NexxusError::Io(format!("read body: {e}")))?;
+    if buf.len() > MAX_DOWNLOAD_BYTES {
+        return Err(NexxusError::Io("download exceeds 512 MiB cap".into()));
+    }
+    Ok(buf)
 }
 
 /// Атомарная замена бинарника с rollback: verify подписи → backup старого →
@@ -181,6 +208,16 @@ pub fn install_update(new_bytes: &[u8], signature_hex: &str, current_bin: &Path)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_url_rules() {
+        assert!(validate_url("https://github.com/x/y").is_ok());
+        assert!(validate_url("http://127.0.0.1:8080/nexxusd").is_ok());
+        assert!(validate_url("http://localhost/x").is_ok());
+        assert!(validate_url("http://evil.example.com/x").is_err(), "plain http вне loopback запрещён");
+        assert!(validate_url("ftp://x").is_err());
+        assert!(validate_url("https://").is_err());
+    }
 
     #[test]
     fn version_tuple_and_is_newer() {
