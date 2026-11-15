@@ -99,11 +99,37 @@ pub enum MonitorState {
     Restarting,
 }
 
+/// Запись в файл телеметрии UI (тот же, что использует фронтенд).
+/// Нужен, чтобы видеть, где именно монитор встаёт — «монитор не видит ноду».
+pub fn ui_log(line: &str) {
+    use std::io::Write;
+    let path = crate::node_config::config_dir().join("monitor-ui.log");
+    // Ограничиваем размер: файл пишется каждые 5 секунд.
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 1024 * 1024 {
+            let _ = std::fs::write(&path, "");
+        }
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{ts}] [rust] {line}");
+    }
+}
+
 /// Состояние узла (из API).
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct NodeStatus {
     pub node_id: String,
+    /// Версия ноды из API (node_status.version) — без неё UI показывал «?».
+    pub version: String,
     pub uptime_ms: u128,
     pub peers: usize,
     pub chunks: usize,
@@ -386,7 +412,12 @@ pub async fn api_is_reachable() -> bool {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let addr = api_addr();
-    let Ok(mut stream) = TcpStream::connect(&addr).await else {
+    let Ok(Ok(mut stream)) = tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        TcpStream::connect(&addr),
+    )
+    .await
+    else {
         return false;
     };
 
@@ -431,6 +462,11 @@ pub async fn get_node_status() -> Result<NodeStatus, String> {
 
     Ok(NodeStatus {
         node_id: result.get("node_id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+        version: result
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
         uptime_ms: result.get("uptime_ms").and_then(|v| v.as_u64()).unwrap_or(0) as u128,
         peers: result.get("peers").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
         chunks: result.get("chunks").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
@@ -459,8 +495,10 @@ pub fn shutdown_requested() -> bool {
 /// Алерты — только на переходах состояния (без спама каждые 10 сек),
 /// heartbeat — раз в час, отчёт об активации Tor — при смене состояния.
 pub async fn health_loop(state: Arc<GuardianState>) {
+    ui_log("health_loop: старт");
     let bot = get_bot().await;
     let _ = bot.notify_monitor_started().await;
+    ui_log("health_loop: Telegram-старт отправлен");
 
     let mut heartbeat_ticks: u64 = 0;
     let mut last_tor: String = String::new();
@@ -481,11 +519,14 @@ pub async fn health_loop(state: Arc<GuardianState>) {
             continue;
         }
 
-        let mut state_lock = state.state.lock().await;
-        let prev_state = state_lock.clone();
+        // ВАЖНО: не держим state.state.lock() через await — иначе любой
+        // долгий await (Telegram/бэкап/PoR) блокирует guardian_status,
+        // и UI навсегда остаётся «Загрузка...».
+        let prev_state = { state.state.lock().await.clone() };
 
         match get_node_status().await {
             Ok(status) => {
+                ui_log(&format!("health_loop: тик ок, node_id={} uptime_ms={}", status.node_id, status.uptime_ms));
                 *state.health_failures.lock().await = 0;
                 *state.node_status.lock().await = Some(status.clone());
 
@@ -504,7 +545,7 @@ pub async fn health_loop(state: Arc<GuardianState>) {
                     last_tor = status.tor.clone();
                 }
 
-                *state_lock = MonitorState::Running;
+                *state.state.lock().await = MonitorState::Running;
 
                 // Heartbeat раз в час
                 heartbeat_ticks += 1;
@@ -557,6 +598,7 @@ pub async fn health_loop(state: Arc<GuardianState>) {
                 }
             }
             Err(e) => {
+                ui_log(&format!("health_loop: тик ошибка — {e}"));
                 let mut failures = state.health_failures.lock().await;
                 *failures += 1;
                 let current_failures = *failures;
@@ -568,30 +610,30 @@ pub async fn health_loop(state: Arc<GuardianState>) {
                 }
 
                 if current_failures >= MAX_HEALTH_FAILURES {
-                    *state_lock = MonitorState::Restarting;
+                    *state.state.lock().await = MonitorState::Restarting;
                     let _ = bot.notify_node_restarting("Потеря связи с API (3 неудачи)").await;
 
                     if let Err(err) = start_nexxusd() {
                         let _ = bot.notify_node_start_failed(&err).await;
-                        *state_lock = MonitorState::Unhealthy;
+                        *state.state.lock().await = MonitorState::Unhealthy;
                     } else if wait_for_api_ready(30).await {
                         match get_node_status().await {
                             Ok(status) => {
                                 *state.node_status.lock().await = Some(status);
-                                *state_lock = MonitorState::Running;
+                                *state.state.lock().await = MonitorState::Running;
                                 let _ = bot.notify_node_restarted().await;
                             }
                             Err(e) => {
                                 let _ = bot.notify_node_start_failed(&e).await;
-                                *state_lock = MonitorState::Unhealthy;
+                                *state.state.lock().await = MonitorState::Unhealthy;
                             }
                         }
                     } else {
                         let _ = bot.notify_node_start_failed("API не отвечает после запуска").await;
-                        *state_lock = MonitorState::Unhealthy;
+                        *state.state.lock().await = MonitorState::Unhealthy;
                     }
                 } else {
-                    *state_lock = MonitorState::Unhealthy;
+                    *state.state.lock().await = MonitorState::Unhealthy;
                 }
             }
         }
@@ -692,6 +734,25 @@ pub async fn guardian_stop_node(state: Arc<GuardianState>) -> Result<Value, Stri
 
 /// Возвращает текущее состояние гардиана.
 pub async fn guardian_status(state: Arc<GuardianState>) -> Result<Value, String> {
+    // Live-запрос к ноде вместо ожидания health-loop: UI обязан видеть ноду
+    // сразу после опроса, даже если фоновый цикл ещё не набрал первый тик.
+    let live = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        get_node_status(),
+    )
+    .await;
+    match live {
+        Ok(Ok(status)) => {
+            ui_log(&format!("guardian_status: live ok, node_id={} version={}", status.node_id, status.version));
+            *state.node_status.lock().await = Some(status);
+            let mut st = state.state.lock().await;
+            if *st != MonitorState::Starting && *st != MonitorState::Restarting {
+                *st = MonitorState::Running;
+            }
+        }
+        Ok(Err(e)) => ui_log(&format!("guardian_status: live ошибка — {e}")),
+        Err(_) => ui_log("guardian_status: live таймаут 3s"),
+    }
     let state_val = { state.state.lock().await.clone() };
     let node_status = { state.node_status.lock().await.clone() };
     let enabled = { *state.monitor_enabled.lock().await };

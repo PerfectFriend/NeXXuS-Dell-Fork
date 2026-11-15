@@ -193,6 +193,27 @@ pub fn node_log_tail_cmd(lines: Option<u32>) -> Result<Value, String> {
     Ok(json!({ "path": path.to_string_lossy(), "lines": tail, "total_lines": content.lines().count() }))
 }
 
+// --- Телеметрия UI ---
+// Фронтенд пишет сюда, что он реально получил от invoke(). Это диагностика
+// «монитор не видит ноду»: без неё мы гадаем по отрисовке.
+
+#[command]
+pub fn ui_log_cmd(line: String) -> Result<Value, String> {
+    let path = crate::node_config::config_dir().join("monitor-ui.log");
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("ui_log open {}: {e}", path.display()))?;
+    use std::io::Write;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    writeln!(f, "[{ts}] {line}").map_err(|e| format!("ui_log write: {e}"))?;
+    Ok(json!({ "ok": true }))
+}
+
 // --- Конфигурация ноды ---
 
 /// Возвращает текущую конфигурацию ноды (из `~/.nexxus/node.conf`).

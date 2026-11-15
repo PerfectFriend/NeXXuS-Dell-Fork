@@ -5,7 +5,7 @@ use crate::commands::{
     guardian_start_node_cmd, guardian_status_cmd, guardian_stop_node_cmd,
     guardian_toggle_monitor_cmd, monitor_version_cmd, node_api_cmd, node_config_get_cmd, node_config_set_cmd,
     nodes_list_cmd, node_api_to_cmd,
-    node_config_validate_cmd, node_install_cmd, node_install_status_cmd, node_log_tail_cmd,
+    node_config_validate_cmd, node_install_cmd, node_install_status_cmd, node_log_tail_cmd, ui_log_cmd,
     node_uninstall_cmd, onboarding_advance_cmd, onboarding_get_cmd, onboarding_reset_cmd,
     run_health_loop, tg_config_check_cmd, tg_config_save_cmd, tg_config_status_cmd,
     tg_send_alert_cmd, tg_send_test_cmd, AppState, selftest_cmd,
@@ -49,6 +49,35 @@ fn show_dashboard(app: &AppHandle) {
 }
 
 fn main() {
+    // Headless-selftest: доказательство работоспособности guardian-пути
+    // без GUI (монитор поднимается, печатает JSON и выходит).
+    // Запуск: nexxus-desktop --selftest-guardian
+    if std::env::args().any(|a| a == "--selftest-guardian") {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        rt.block_on(async {
+            let st = Arc::new(guardian::GuardianState::new());
+            let t0 = std::time::Instant::now();
+            let status = guardian::get_node_status().await;
+            let status_ms = t0.elapsed().as_millis();
+            let t1 = std::time::Instant::now();
+            let g = guardian::guardian_status(st).await;
+            let g_ms = t1.elapsed().as_millis();
+            println!(
+                "{}",
+                serde_json::json!({
+                    "get_node_status_ms": status_ms,
+                    "get_node_status": status,
+                    "guardian_status_ms": g_ms,
+                    "guardian_status": g,
+                })
+            );
+        });
+        std::process::exit(0);
+    }
+
     // Флаг --shutdown (из .desktop-действия Quit): работающий экземпляр
     // держит lock, поэтому этот процесс не запустится — вместо этого он
     // оставляет файл-запрос, и работающий монитор выполнит полное
@@ -238,6 +267,7 @@ fn main() {
             node_install_cmd,
             node_uninstall_cmd,
             node_install_status_cmd,
+            ui_log_cmd,
         ])
         .on_window_event(|window, event| {
             // Закрытие окна = свернуть в трей, монитор продолжает жить

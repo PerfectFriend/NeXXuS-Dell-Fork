@@ -185,15 +185,19 @@ impl TelegramBot {
 static TELEGRAM_BOT: Mutex<Option<TelegramBot>> = Mutex::const_new(None);
 
 pub async fn get_bot() -> Arc<TelegramBot> {
-    let guard = TELEGRAM_BOT.lock().await;
-    if guard.is_none() {
-        drop(guard);
-        let mut guard = TELEGRAM_BOT.lock().await;
-        if guard.is_none() {
-            *guard = Some(TelegramBot::new());
+    // ВАЖНО: tokio::sync::Mutex НЕ реентрантен. Прежний код держал первый
+    // guard живым и брал второй lock того же мьютекса -> get_bot() вешалась
+    // навсегда после первой инициализации. Из-за этого health-loop не тикал,
+    // guardian_status не возвращался, а UI навсегда висел «Загрузка...».
+    {
+        let guard = TELEGRAM_BOT.lock().await;
+        if let Some(bot) = guard.as_ref() {
+            return Arc::new(bot.clone());
         }
     }
-    Arc::new(TELEGRAM_BOT.lock().await.as_ref().unwrap().clone())
+    let mut guard = TELEGRAM_BOT.lock().await;
+    let bot = guard.get_or_insert_with(TelegramBot::new).clone();
+    Arc::new(bot)
 }
 
 // --- Конфиг Telegram из UI (Phase C: панель настроек) ---

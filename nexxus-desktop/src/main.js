@@ -150,6 +150,7 @@ let lastOk = null;
 async function fetchStatus() {
   try {
     const result = await invoke('guardian_status_cmd');
+    try { await invoke('ui_log_cmd', { line: 'status: ' + JSON.stringify(result) }); } catch (e) { /* ignore */ }
     state.guardianState = result.state || 'unknown';
     state.monitorEnabled = result.monitor_enabled || false;
     state.tgConfigured = !!result.tg_configured;
@@ -182,6 +183,7 @@ async function fetchStatus() {
       }
     }).catch(() => {});
   } catch (e) {
+    try { await invoke('ui_log_cmd', { line: 'status ERROR: ' + String(e) }); } catch (e2) { /* ignore */ }
     if (lastOk !== false) {
       lastOk = false;
       state.apiReachable = false;
@@ -674,6 +676,7 @@ async function fetchOnboarding() {
 async function init() {
   activateTab('overview');
   addStageLog('Гардиан инициализирован.', 'info');
+  try { await invoke('ui_log_cmd', { line: 'init: JS старт, title=' + (document.title || '?') }); } catch (e) { /* ignore */ }
   bindFleetSelect();
   renderApiTab();
   try {
