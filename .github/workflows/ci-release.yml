@@ -326,6 +326,12 @@ jobs:
           name: nexxusd-windows
           path: dist
 
+      - name: 🏷️ Rename Windows asset + stage service scripts
+        run: |
+          mv dist/nexxusd.exe dist/nexxusd-windows-x86_64.exe
+          mkdir -p dist/windows
+          cp scripts/windows/install-service.ps1 scripts/windows/uninstall-service.ps1 scripts/windows/nexxus-service.xml dist/windows/
+
       - name: 🚀 Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -336,7 +342,10 @@ jobs:
             dist/*.deb
             dist/*.AppImage
             dist/app-debug.apk
-            dist/nexxusd.exe
+            dist/nexxusd-windows-x86_64.exe
+            dist/windows/install-service.ps1
+            dist/windows/uninstall-service.ps1
+            dist/windows/nexxus-service.xml
             install.sh
             install.ps1
           name: Release ${{ github.ref_name }}

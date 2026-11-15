@@ -1,0 +1,20 @@
+<!-- WinSW service config для Rust-ноды NeXXuS (nexxusd.exe).
+     Установка: scripts/windows/install-service.ps1 (админ). -->
+<service>
+  <id>NeXXuSNode</id>
+  <name>NeXXuS Storage Node</name>
+  <description>NeXXuS P2P storage node daemon (Rust nexxusd, serve mode). Local API on 127.0.0.1:4010 (token-gated), P2P on 4001.</description>
+  <executable>%BASE%\nexxusd.exe</executable>
+  <arguments>serve</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <env name="NEXXUS_DATA_DIR" value="%ProgramData%\NeXXuS"/>
+  <env name="NEXXUS_LISTEN" value="0.0.0.0:4001"/>
+  <env name="NEXXUS_API_ADDR" value="127.0.0.1:4010"/>
+  <env name="NEXXUS_TOR" value="1"/>
+  <!-- Логи службы: stdout/stderr в файлы, ротация по размеру -->
+  <log mode="rotate" sizeThreshold="10485760" maxSize="5"/>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <stop timeout="15 sec"/>
+  <startmode>Automatic</startmode>
+</service>
