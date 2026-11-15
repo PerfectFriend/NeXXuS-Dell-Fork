@@ -35,6 +35,7 @@
         <button class="tab-btn" data-tab="tor">🧅 Tor</button>
         <button class="tab-btn" data-tab="epoch">⏳ Эпоха</button>
         <button class="tab-btn" data-tab="econ">💰 Экономика</button>
+        <button class="tab-btn" data-tab="api">🎛️ API ноды</button>
         <button class="tab-btn" data-tab="settings">⚙️ Настройки</button>
       </nav>
 
@@ -232,6 +233,16 @@
           <h3>Вестинг (56 дней)</h3>
           <div class="controls-row"><div id="vesting-bar" style="flex:1; height:18px; background:var(--border); border-radius:9px; overflow:hidden;"><div id="vesting-fill" style="height:100%; width:0%; background:var(--accent);"></div></div><span id="vesting-label" class="muted"></span></div>
           <div id="econ-detail" class="muted"></div>
+        </section>
+      </div>
+      <!-- API НОДЫ — все методы, сгруппированные по смыслу -->
+      <div class="tab-pane" id="pane-api">
+        <section class="panel">
+          <h2>🎛️ Прямые вызовы API ноды (ws://… token-gated)</h2>
+          <p class="muted">Каждая кнопка — реальный вызов метода ноды через <code>api()</code>. Параметры уходят как JSON; ответы и ошибки показываются ниже. Деструктивные методы требуют <code>confirm: true</code> на стороне ноды — галка «подтверждаю».</p>
+          <div id="api-groups"></div>
+          <h3>Ответ</h3>
+          <pre id="api-result" class="log-box">—</pre>
         </section>
       </div>
       <!-- НАСТРОЙКИ -->

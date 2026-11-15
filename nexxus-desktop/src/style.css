@@ -441,3 +441,11 @@ body {
 .data-box .ok { color: var(--success); }
 .data-box .err { color: var(--danger); }
 
+
+/* --- Вкладка API: группы методов --- */
+.api-group { margin: 10px 0 14px; }
+.api-group h3 { margin: 8px 0 6px; font-size: 14px; color: var(--accent); }
+.api-row { flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.api-row input[type="text"], .api-row input:not([type]) { min-width: 140px; flex: 1; }
+.api-row input[type="number"] { width: 90px; }
+.api-row textarea { min-height: 44px; }

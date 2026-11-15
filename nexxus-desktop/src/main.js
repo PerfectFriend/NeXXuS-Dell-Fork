@@ -28,7 +28,7 @@ const els = {
 };
 
 // --- Роутер вкладок ---
-const TABS = ['overview', 'node', 'network', 'storage', 'logs', 'tor', 'epoch', 'econ', 'settings'];
+const TABS = ['overview', 'node', 'network', 'storage', 'logs', 'tor', 'epoch', 'econ', 'api', 'settings'];
 let activeTab = 'overview';
 let logsLive = false;
 let logsTimer = null;
@@ -674,6 +674,7 @@ async function init() {
   activateTab('overview');
   addStageLog('Гардиан инициализирован.', 'info');
   bindFleetSelect();
+  renderApiTab();
   await refreshFleetList();
   await fetchStatus();
   await fetchOnboarding();
@@ -982,5 +983,185 @@ async function runSelftest() {
   }
 }
 $('btn-selftest').addEventListener('click', runSelftest);
+
+// --- Вкладка 🎛️ API: ВСЕ методы ноды, сгруппированные по смыслу ---
+// p: параметры метода. t: text|password|number|checkbox(bool)|json(whole params из textarea)
+const P = (k, ph, t = 'text') => ({ k, ph, t });
+const API_GROUPS = [
+  { title: '📊 Статус и здоровье', items: [
+    { m: 'node_status', label: '📊 Статус' },
+    { m: 'node_metrics', label: '📈 Метрики' },
+    { m: 'node_doctor', label: '🩺 Doctor' },
+    { m: 'node_por', label: '🔍 PoR' },
+    { m: 'node_epoch', label: '⏳ Эпоха' },
+    { m: 'node_tor', label: '🧅 Tor статус' },
+    { m: 'node_peers', label: '🌐 Пиры' },
+    { m: 'ping', label: '🏓 Ping API' },
+  ]},
+  { title: '🌐 Сеть', items: [
+    { m: 'node_connect', label: '🔌 Connect', p: [P('addr', 'host:port или /ip4/…/tcp/4001')] },
+    { m: 'node_ping_peer', label: '📡 Ping пира (RTT)', p: [P('addr', 'host:port')] },
+    { m: 'node_pause', label: '⏸ Пауза сети' },
+    { m: 'node_resume', label: '▶ Возобновить сеть' },
+    { m: 'node_dial_onion', label: '🧅 Dial onion', p: [P('addr', 'xxxx….onion:port')] },
+    { m: 'node_replicate_onion', label: '🧅 Replicate onion-only (Tor)' },
+    { m: 'node_onion_only_list', label: '🧅 Onion-only чанки' },
+  ]},
+  { title: '💾 Чанки и хранилище', items: [
+    { m: 'node_chunks', label: '📦 Чанки' },
+    { m: 'node_upload', label: '⬆️ Upload файла', p: [P('path', '/путь/к/файлу')] },
+    { m: 'node_download', label: '⬇️ Download', p: [P('root', 'merkle root hex64'), P('out', 'файл назначения')] },
+    { m: 'node_manifest_get', label: '📜 Манифест (per-file ключи)', p: [P('root', 'merkle root hex64')] },
+    { m: 'node_chunk_pin', label: '📌 Pin', p: [P('hash', 'hash hex64')] },
+    { m: 'node_chunk_unpin', label: '📍 Unpin', p: [P('hash', 'hash hex64')] },
+    { m: 'node_chunk_ttl', label: '⏱ TTL', p: [P('hash', 'hash hex64'), P('ttl_secs', 'сек (0=clear)', 'number')] },
+    { m: 'node_chunk_onion_only', label: '🧅 Onion-only', p: [P('hash', 'hash hex64'), P('on', 'вкл', 'checkbox')] },
+    { m: 'node_gc', label: '🧹 GC', danger: true, p: [P('confirm', 'подтверждаю', 'checkbox')] },
+  ]},
+  { title: '🏷 Имена (версионирование)', items: [
+    { m: 'node_name_set', label: '💾 Set', p: [P('name', 'имя'), P('hash', 'hash hex64')] },
+    { m: 'node_name_get', label: '👁 Get', p: [P('name', 'имя')] },
+    { m: 'node_name_list', label: '📃 Список' },
+    { m: 'node_name_history', label: '🕘 История', p: [P('name', 'имя')] },
+  ]},
+  { title: '🧩 SMP (шифрованные сообщения)', items: [
+    { m: 'node_smp', label: '📥 Inbox' },
+    { m: 'node_smp_send', label: '📨 Отправить', p: [P('recipient_node_id', 'node_id hex64'), P('recipient_pub', 'ed25519 pub hex64'), P('message', 'текст ≤4096 байт')] },
+  ]},
+  { title: '📜 Политики хранения', items: [
+    { m: 'node_policy_list', label: '📃 Список' },
+    { m: 'node_policy_set', label: '➕ Set', p: [P('id', 'id политики'), P('name_prefix', 'префикс имени'), P('action', 'например onion-only')] },
+    { m: 'node_policy_delete', label: '🗑 Delete', p: [P('id', 'id политики')] },
+    { m: 'node_policy_apply', label: '▶ Apply (confirm)', danger: true, p: [P('confirm', 'подтверждаю', 'checkbox')] },
+  ]},
+  { title: '🚀 Bootstrap-реестр (подписанный)', items: [
+    { m: 'node_bootstrap_get', label: '📥 Получить' },
+    { m: 'node_bootstrap_set', label: '📤 Установить envelope (JSON)', p: [P('envelope', 'nexxus-bootstrap/v1 envelope JSON', 'json')] },
+  ]},
+  { title: '💾 Бэкапы стора', items: [
+    { m: 'node_backup', label: '💾 Создать' },
+    { m: 'node_backup_list', label: '📃 Список' },
+    { m: 'node_backup_verify', label: '🔍 Verify', p: [P('name', 'имя бэкапа')] },
+    { m: 'node_backup_restore', label: '♻️ Restore (confirm)', danger: true, p: [P('name', 'имя бэкапа'), P('confirm', 'подтверждаю', 'checkbox')] },
+    { m: 'node_backup_delete', label: '🗑 Delete (confirm)', danger: true, p: [P('name', 'имя бэкапа'), P('confirm', 'подтверждаю', 'checkbox')] },
+  ]},
+  { title: '🎁 Bundle export/import (холодный бэкап)', items: [
+    { m: 'node_export_bundle', label: '📤 Export bundle', p: [P('pin', 'PIN шифрования bundle', 'password')] },
+    { m: 'node_import_bundle', label: '📥 Import bundle', danger: true, p: [P('path', 'путь к bundle'), P('pin', 'PIN', 'password'), P('confirm', 'подтверждаю', 'checkbox')] },
+  ]},
+  { title: '🔐 Идентичность и seed vault', items: [
+    { m: 'node_identity_status', label: 'ℹ️ Статус' },
+    { m: 'node_identity_export', label: '👁 Экспорт сид-фразы (confirm)', danger: true, p: [P('confirm', 'подтверждаю', 'checkbox')] },
+    { m: 'node_identity_import', label: '♻️ Импорт из сид-фразы', danger: true, p: [P('mnemonic', '12/24 слова', 'textarea')] },
+    { m: 'node_seed_vault_status', label: '🔐 Статус seed.vault' },
+    { m: 'node_seed_backup', label: '🔐 Бэкап сида', p: [P('pin', 'PIN', 'password'), P('duress_pin', 'duress-PIN (опц.)', 'password')] },
+    { m: 'node_seed_restore', label: '♻️ Восстановить сид', danger: true, p: [P('pin', 'PIN', 'password')] },
+  ]},
+  { title: '💰 Экономика', items: [
+    { m: 'node_econ', label: '💰 Econ' },
+    { m: 'node_econ_export', label: '🖊 Подписанный экспорт (ed25519)' },
+  ]},
+  { title: '⛔ Panic / duress', items: [
+    { m: 'panic_status', label: 'ℹ️ Статус' },
+    { m: 'panic_arm', label: '🚨 Arm (установить duress)', danger: true, p: [P('pin', 'основной PIN', 'password'), P('duress_pin', 'duress PIN', 'password')] },
+    { m: 'panic_enter', label: '⛔ Enter panic mode', danger: true, p: [P('pin', 'PIN (или duress)', 'password')] },
+  ]},
+  { title: '🧪 Тесты', items: [
+    { m: 'node_test_interhost', label: '🌍 Interhost-тест', p: [P('addr', 'адрес второго узла')] },
+  ]},
+];
+
+let apiUid = 0;
+function renderApiTab() {
+  const host = $('api-groups');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const g of API_GROUPS) {
+    const sec = document.createElement('div');
+    sec.className = 'api-group';
+    const h = document.createElement('h3');
+    h.textContent = g.title;
+    sec.appendChild(h);
+    for (const it of g.items) {
+      const row = document.createElement('div');
+      row.className = 'row-inline api-row';
+      const btn = document.createElement('button');
+      btn.className = 'btn' + (it.danger ? ' btn-danger' : ' btn-outline');
+      btn.textContent = it.label;
+      btn.title = it.m;
+      const inputs = [];
+      for (const p of it.p || []) {
+        let inp;
+        if (p.t === 'json' || p.t === 'textarea') {
+          inp = document.createElement('textarea');
+          inp.rows = 3;
+          inp.placeholder = p.ph;
+          inp.style.flex = '1';
+        } else {
+          inp = document.createElement('input');
+          inp.placeholder = p.ph;
+          if (p.t === 'password') inp.type = 'password';
+          if (p.t === 'number') inp.type = 'number';
+          if (p.t === 'checkbox') { inp.type = 'checkbox'; inp.checked = false; inp.title = p.ph; }
+        }
+        inp.dataset.pk = p.k;
+        inp.dataset.pt = p.t;
+        inputs.push(inp);
+        if (p.t === 'checkbox') {
+          const lab = document.createElement('label');
+          lab.className = 'check muted';
+          lab.appendChild(inp);
+          lab.appendChild(document.createTextNode(' ' + p.ph));
+          row.appendChild(lab);
+        } else {
+          row.appendChild(inp);
+        }
+      }
+      btn.addEventListener('click', () => runApi(it.m, inputs, btn));
+      row.appendChild(btn);
+      sec.appendChild(row);
+    }
+    host.appendChild(sec);
+  }
+}
+
+async function runApi(method, inputs, btn) {
+  const out = $('api-result');
+  let params = null;
+  const shown = {};
+  for (const inp of inputs) {
+    const k = inp.dataset.pk, t = inp.dataset.pt;
+    if (t === 'json' || t === 'textarea') {
+      const v = inp.value.trim();
+      if (!v) continue;
+      if (t === 'json') {
+        try { params = JSON.parse(v); } catch (e) { out.textContent = `❌ ${method}: невалидный JSON: ${e}`; return; }
+        shown[k] = '<json>';
+        continue;
+      }
+      (params = params || {})[k] = v;
+      shown[k] = t === 'textarea' ? '<text>' : v;
+    } else if (t === 'checkbox') {
+      if (inp.checked) { (params = params || {})[k] = true; shown[k] = true; }
+    } else {
+      const v = inp.value.trim();
+      if (!v) continue;
+      (params = params || {})[k] = (t === 'number') ? Number(v) : v;
+      shown[k] = (t === 'password') ? '••••' : v;
+    }
+  }
+  btn.disabled = true;
+  out.textContent = `→ ${method} ${JSON.stringify(shown)}\n…`;
+  try {
+    const r = await api(method, params);
+    out.textContent = `✅ ${method} ${JSON.stringify(shown)}\n\n` + JSON.stringify(r, null, 2);
+    addStageLog(`API ${method} ok`, 'success');
+  } catch (e) {
+    out.textContent = `❌ ${method} ${JSON.stringify(shown)}\n\nОшибка: ${e}`;
+    addStageLog(`API ${method} error: ${e}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 init();
