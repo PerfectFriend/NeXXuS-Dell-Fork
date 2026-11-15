@@ -872,6 +872,10 @@ mod start_flow_tests {
         let t0 = Instant::now();
         start_nexxusd().expect("start_nexxusd");
         eprintln!("[t+{:.1?}] spawned", t0.elapsed());
+        // Guard отпускаем ДО await: std::sync::MutexGuard нельзя держать через
+        // await (clippy::await_holding_lock). Нода уже запущена — env больше
+        // не нужен, а блокировку берём снова на финальный remove_var.
+        drop(_g);
 
         let ready = wait_for_api_ready(30).await;
         eprintln!("[t+{:.1?}] wait_for_api_ready(30) = {ready}", t0.elapsed());
@@ -882,7 +886,10 @@ mod start_flow_tests {
         assert!(status.is_ok(), "node_status failed: {:?}", status.err());
 
         let _ = stop_nexxusd();
-        std::env::remove_var("NEXXUSD_BIN");
+        {
+            let _g = ENV_LOCK.lock().unwrap();
+            std::env::remove_var("NEXXUSD_BIN");
+        }
         eprintln!("[t+{:.1?}] done", t0.elapsed());
     }
 

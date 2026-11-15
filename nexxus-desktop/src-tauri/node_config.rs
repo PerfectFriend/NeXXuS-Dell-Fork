@@ -357,6 +357,7 @@ mod tests {
             auto_backup_hours: 12,
             auto_backup_keep: 3,
             por_interval_hours: 6,
+            por_enabled: true,
             spec_version: "v3".into(),
             log_path: "/tmp/custom.log".into(),
         };
