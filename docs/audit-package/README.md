@@ -15,15 +15,21 @@ NeXXus Node — P2P-узел децентрализованного хранил
 
 ```bash
 git clone <repo> && cd NeXXus-Node
-cargo test --workspace                 # 190+ тестов, все зелёные на момент аудита
+cargo test --workspace                 # 206 passed / 0 failed / 1 ignored (проверено 2026-11-15, HEAD 204cf51)
 cargo clippy --workspace --all-targets -- -D warnings   # 0 warnings
 cargo build --release -p nexxus-node   # собирает nexxusd
 NEXXUS_DATA_DIR=$(mktemp -d) NEXXUS_LISTEN=127.0.0.1:14001 NEXXUS_API_ADDR=127.0.0.1:14010 NEXXUS_TOR=0 \
   ./target/release/nexxusd &            # поднять демон
-python3 scripts/e2e_smoke.py            # 46/46 живых WS-проверок (auth, chunks, backup, SMP, names, bootstrap, econ-подпись)
+python3 scripts/e2e_smoke.py            # 58/58 живых WS-проверок (auth, chunks, backup, SMP, names, bootstrap, econ-подпись, onion-only политики)
 ```
 
-Desktop: `cd nexxus-desktop/src-tauri && cargo test` (22/22, включая реальный spawn/stop ноды).
+Desktop: `cd nexxus-desktop/src-tauri && cargo test --bins` (22/22, включая реальный spawn/stop ноды) + `cargo clippy --all-targets -- -D warnings` (0).
+
+> Внимание аудитора: desktop-тест `guardian::start_flow_completes_with_timings` вызывает
+> `stop_nexxusd()`/`start_nexxusd()`, а они управляют **пользовательским systemd-юнитом**
+> `nexxus-node.service`. На машине с живой нодой прогон desktop-тестов глушит её.
+> Это известный дефект изоляции тестов — см. задание P0-C в письме аудиторам
+> `docs/audits/2026-11-15-auditor-briefing.md`.
 
 ## 3. Единый конфиг (важно для понимания портов)
 
