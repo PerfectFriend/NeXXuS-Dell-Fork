@@ -442,6 +442,7 @@ impl LocalApi {
             "node_chunk_ttl" => self.handle_node_chunk_ttl(req.params),
             "node_name_set" => self.handle_node_name_set(req.params),
             "node_name_get" => self.handle_node_name_get(req.params),
+            "node_manifest_get" => self.handle_node_manifest_get(req.params),
             "node_name_history" => self.handle_node_name_history(req.params),
             "node_name_list" => self.handle_node_name_list(),
             "node_bootstrap_set" => self.handle_node_bootstrap_set(req.params),
@@ -1027,6 +1028,20 @@ impl LocalApi {
             .map(|(ts, h)| serde_json::json!({ "ts_ns": ts, "hash": hex::encode(h.0) }))
             .collect::<Vec<_>>();
         Ok(serde_json::json!({ "name": name, "history": hist }))
+    }
+
+    /// Манифест файла по root (владелец ноды, token-gated): содержит per-file
+    /// key — нужен light-клиенту для локальной merkle-верификации скачанного.
+    fn handle_node_manifest_get(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let root = params
+            .and_then(|p| p.get("root").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .ok_or_else(|| NexxusError::Io("param 'root'".into()))?;
+        let raw = self
+            .store
+            .get_meta(&format!("manifest_{root}"))?
+            .ok_or_else(|| NexxusError::Io(format!("no manifest for root {root}")))?;
+        serde_json::from_slice(&raw)
+            .map_err(|e| NexxusError::Io(format!("bad manifest json: {e}")))
     }
 
     /// E2 versioning: список всех имён.

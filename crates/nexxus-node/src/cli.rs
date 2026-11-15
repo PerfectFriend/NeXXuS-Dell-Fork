@@ -26,6 +26,39 @@ fn api_addr() -> String {
     env::var("NEXXUS_API_ADDR").unwrap_or_else(|_| "127.0.0.1:4010".to_string())
 }
 
+/// Merkle root файла локально: 16 KiB чанки, zero-pad, SHA-256 leaves.
+/// Тот же алгоритм, что в ноде и в nexxus-wasm — light client сверяет root сам.
+fn merkle_root_of_file(data: &[u8]) -> [u8; 32] {
+    let chunks = nexxus_core::chunk::slice(data);
+    let leaves: Vec<[u8; 32]> = chunks
+        .iter()
+        .map(|c| {
+            let mut padded = c.clone();
+            padded.resize(nexxus_core::chunk::CHUNK_SIZE, 0);
+            Sha256::digest(&padded).into()
+        })
+        .collect();
+    nexxus_core::merkle::merkle_root(&leaves)
+}
+
+/// Двухуровневый root как у ноды (vault.rs): чанк → RS-shards → seal(key, i, shard)
+/// → sha256 → chunk_root; root = merkle(chunk_roots). Нужен per-file ключ из манифеста.
+fn merkle_root_of_file_sealed(data: &[u8], key: &[u8; 32]) -> Result<[u8; 32], String> {
+    let chunks = nexxus_core::chunk::slice(data);
+    let mut chunk_roots = Vec::with_capacity(chunks.len());
+    for (i, plain) in chunks.iter().enumerate() {
+        let shards = nexxus_core::rs::encode(plain);
+        let mut shard_hashes = Vec::with_capacity(shards.len());
+        for shard in shards.iter() {
+            let sealed = nexxus_core::chunk::ChunkAead::seal(key, i as u64, shard)
+                .map_err(|e| e.to_string())?;
+            shard_hashes.push(Sha256::digest(&sealed).into());
+        }
+        chunk_roots.push(nexxus_core::merkle::merkle_root(&shard_hashes));
+    }
+    Ok(nexxus_core::merkle::merkle_root(&chunk_roots))
+}
+
 /// One JSON-RPC call over WebSocket to the local daemon.
 ///
 /// Сначала выполняет `auth` с токеном из `~/.nexxus/api.token`
@@ -89,6 +122,7 @@ async fn cmd_light(rest: &[String]) -> i32 {
     // парсим флаги
     let mut api: Option<String> = None;
     let mut token_file: Option<String> = None;
+    let mut key_hex: Option<String> = None;
     let mut pos = Vec::new();
     let mut i = 0;
     while i < rest.len() {
@@ -104,6 +138,14 @@ async fn cmd_light(rest: &[String]) -> i32 {
             "--token-file" => {
                 if let Some(v) = rest.get(i + 1) {
                     token_file = Some(v.clone());
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            "--key" => {
+                if let Some(v) = rest.get(i + 1) {
+                    key_hex = Some(v.clone());
                     i += 2;
                 } else {
                     i += 1;
@@ -127,10 +169,62 @@ async fn cmd_light(rest: &[String]) -> i32 {
         Some("peers") => print_result(ws_call("node_peers", json!({})).await),
         Some("get") => match (pos.get(1), pos.get(2)) {
             (Some(root), Some(out)) => {
-                print_result(ws_call("node_download", json!({ "root": root, "out": out })).await)
+                // E6 light client: скачиваем через ноду, затем САМИ проверяем
+                // merkle root файла локально — нода не является доверенным
+                // источником целостности.
+                let res = ws_call("node_download", json!({ "root": root, "out": out })).await;
+                match res {
+                    Ok(v) if v.get("error").is_none() => {
+                        println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+                        match std::fs::read(out) {
+                            Ok(data) => {
+                                // Верификация: с --key — двухуровневый root как у ноды;
+                                // без ключа — одноуровневый (должен совпасть, если нода
+                                // считает root так же; иначе FAIL — честно).
+                                let local_hex = match &key_hex {
+                                    Some(kh) => match hex::decode(kh) {
+                                        Ok(kb) if kb.len() == 32 => {
+                                            let key: [u8; 32] = kb.try_into().unwrap();
+                                            match merkle_root_of_file_sealed(&data, &key) {
+                                                Ok(r) => hex::encode(r),
+                                                Err(e) => {
+                                                    eprintln!("light verify: seal error: {e}");
+                                                    return 3;
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            eprintln!("light verify: --key должен быть 64 hex-символа");
+                                            return 3;
+                                        }
+                                    },
+                                    None => hex::encode(merkle_root_of_file(&data)),
+                                };
+                                if local_hex == root.to_lowercase() {
+                                    println!("light verify: OK — merkle root {} совпадает", local_hex);
+                                    0
+                                } else {
+                                    eprintln!(
+                                        "light verify: FAIL — локальный root {} != запрошенный {}",
+                                        local_hex, root
+                                    );
+                                    3
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("light verify: не удалось прочитать {out}: {e}");
+                                3
+                            }
+                        }
+                    }
+                    other => {
+                        println!("{}", serde_json::to_string_pretty(&other).unwrap_or_default());
+                        1
+                    }
+                }
             }
             _ => {
-                eprintln!("usage: nexxusd light get <root-hex> <out-file>");
+                eprintln!("usage: nexxusd light get <root-hex> <out-file> [--key <hex64>]");
                 2
             }
         },
@@ -141,8 +235,15 @@ async fn cmd_light(rest: &[String]) -> i32 {
                 2
             }
         },
+        Some("manifest") => match pos.get(1) {
+            Some(root) => print_result(ws_call("node_manifest_get", json!({ "root": root })).await),
+            None => {
+                eprintln!("usage: nexxusd light manifest <root-hex>");
+                2
+            }
+        },
         _ => {
-            eprintln!("usage: nexxusd light status | chunks | peers | get <root-hex> <out> | pin <hash>  [--api host:port] [--token-file path]");
+            eprintln!("usage: nexxusd light status | chunks | peers | get <root-hex> <out> [--key hex64] | pin <hash> | manifest <root>  [--api host:port] [--token-file path]");
             2
         }
     }

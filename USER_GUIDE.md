@@ -87,3 +87,6 @@ nexxusd            # слушает P2P 127.0.0.1:4001, Local API 127.0.0.1:4010
 ### WASM light client (E6, web-applet)
 `crates/nexxus-wasm` собирается под `wasm32-unknown-unknown` (проверено: `cargo build -p nexxus-wasm --target wasm32-unknown-unknown --release`).
 Экспорт: `seal_chunk` / `open_chunk` (тот же XChaCha20-Poly1305, что у ноды — браузер открывает sealed чанки локально по ключу файла из манифеста, нода ключ не видит), `sealed_chunk_hash_hex`, `merkle_proof_flat` / `merkle_verify_flat` (проверка целостности по merkle-доказательству), плюс chunking/RS/merkle/identity из прежнего набора. Сеть — через JS WebSocket к WS API ноды; ключи в браузер попадают только явно из манифеста.
+
+### Light client: локальная верификация скачанного (E6)
+`nexxusd light get <root> <out> --key <hex64>` — после скачивания клиент сам пересчитывает двухуровневый merkle root (как у ноды: chunk → RS-shards → seal(key) → sha256 → merkle) и сверяет с запрошенным. Exit 0 = OK, 3 = FAIL. Ключ берётся из манифеста: `nexxusd light manifest <root>` (API `node_manifest_get`, token-gated). Без `--key` — одноуровневая проверка (совпадёт только если root считался так же).
