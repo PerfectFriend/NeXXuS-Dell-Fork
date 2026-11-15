@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { render as renderOverview } from './views/overview.js';
 import { formatUptime, formatBytes } from './format.js';
 
@@ -157,6 +158,7 @@ async function fetchStatus() {
     const nodeStatus = result.node_status;
     if (nodeStatus) {
       state.nodeId = nodeStatus.node_id || '—';
+      state.nodeVer = nodeStatus.version || '?';
       state.uptimeMs = nodeStatus.uptime_ms || 0;
       state.peers = String(nodeStatus.peer_count ?? nodeStatus.peers ?? 0);
       state.apiReachable = !!nodeStatus.api_reachable;
@@ -675,6 +677,10 @@ async function init() {
   addStageLog('Гардиан инициализирован.', 'info');
   bindFleetSelect();
   renderApiTab();
+  getVersion().then((v) => {
+    const el = document.getElementById('monitor-ver');
+    if (el) el.textContent = `монитор v${v}`;
+  }).catch(() => {});
   await refreshFleetList();
   await fetchStatus();
   await fetchOnboarding();

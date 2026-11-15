@@ -77,8 +77,13 @@ fn main() {
     let app = Builder::default()
         .manage(app_state)
         .setup(|app| {
-            // Окно не показывается при старте — только иконка в трее
+            // Заголовок окна всегда содержит версию сборки монитора —
+            // чтобы не путать со старыми бинарями.
             if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_title(&format!(
+                    "NeXXus Node Monitor v{}",
+                    env!("CARGO_PKG_VERSION")
+                ));
                 let _ = window.hide();
             }
 

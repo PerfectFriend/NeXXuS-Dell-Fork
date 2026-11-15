@@ -11,6 +11,7 @@ export function render(root, state) {
   };
   // Node ID вынесен в широкое поле над вкладками.
   set('node-id-value', state.nodeId);
+  set('node-ver', `· нода v${state.nodeVer || '?'}`);
   set('guardian-state', state.guardianState);
   set('guardian-api', state.apiReachable ? 'Доступен' : 'Недоступен');
   set('guardian-uptime', formatUptime(state.uptimeMs));

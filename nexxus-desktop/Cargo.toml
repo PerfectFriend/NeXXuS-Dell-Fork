@@ -1,6 +1,6 @@
 [package]
 name = "nexxus-desktop"
-version = "1.0.0"
+version = "0.0228"
 description = "NeXXus Node Monitor — Guardian (ангел-хранитель ноды)"
 edition = "2021"
 

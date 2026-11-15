@@ -14,13 +14,14 @@
         <select id="fleet-select" class="fleet-select" title="Fleet: переключение между узлами (~/.nexxus/nodes/*.conf)">
           <option value="">— одиночный узел —</option>
         </select>
+        <span class="tray-hint" id="monitor-ver">монитор v?</span>
         <span class="tray-hint" id="onboarding-hint">Онбординг: …</span>
         <span class="tray-hint">Работает в трее • Клик на иконку — открыть окно</span>
       </div>
     </header>
 
     <section class="node-id-hero">
-      <div class="node-id-label">NODE ID</div>
+      <div class="node-id-label">NODE ID <span class="muted" id="node-ver">· нода v?</span></div>
       <div class="node-id-value" id="node-id-value">—</div>
       <button class="btn btn-mini" id="btn-copy-node-id" title="Скопировать Node ID">📋 Копировать</button>
     </section>
