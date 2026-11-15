@@ -208,3 +208,4 @@ Q3+             E6 Ecosystem, formal bits, marketplace only with real settlement
 - [x] E6 WASM light-client surface: seal_chunk/open_chunk/sealed_chunk_hash_hex/merkle_proof_flat/merkle_verify_flat в nexxus-wasm; wasm32 release build OK (916KB), host tests 4/4
 - [x] Formal bits: formal_props.rs (nonce binding + vault KDF properties, 2/2 proptest зелёные), воркспейс 206 passed / 0 failed
 - [x] E6 light client self-verify: `light get --key` локально сверяет двухуровневый merkle root (exit 3 при mismatch), `light manifest` + API `node_manifest_get`; живой прогон: OK + bytes identical + bad-key FAIL exit 3
+- [x] E4/W2 artifacts: scripts/windows/{nexxus-service.xml,install-service.ps1,uninstall-service.ps1} (pwsh parser OK), CI release asset nexxusd-windows-x86_64.exe + windows scripts; firewall = P2P port only, API loopback

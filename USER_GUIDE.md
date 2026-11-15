@@ -90,3 +90,7 @@ nexxusd            # слушает P2P 127.0.0.1:4001, Local API 127.0.0.1:4010
 
 ### Light client: локальная верификация скачанного (E6)
 `nexxusd light get <root> <out> --key <hex64>` — после скачивания клиент сам пересчитывает двухуровневый merkle root (как у ноды: chunk → RS-shards → seal(key) → sha256 → merkle) и сверяет с запрошенным. Exit 0 = OK, 3 = FAIL. Ключ берётся из манифеста: `nexxusd light manifest <root>` (API `node_manifest_get`, token-gated). Без `--key` — одноуровневая проверка (совпадёт только если root считался так же).
+
+### Windows: служба (WinSW) + firewall (E4/W2)
+- Релиз-ассет `nexxusd-windows-x86_64.exe` (mingw cross-build в CI) + `scripts/windows/` (install-service.ps1, uninstall-service.ps1, nexxus-service.xml) — тоже в релизе.
+- Установка админом: `irm .../scripts/windows/install-service.ps1 | iex` — качает nexxusd.exe и WinSW, регистрирует службу `NeXXuSNode` (auto-start, restart on failure), открывает firewall только для P2P-порта (4001); API 4010 остаётся loopback-only. Данные — ProgramData\NeXXuS.
