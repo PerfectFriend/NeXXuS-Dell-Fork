@@ -20,6 +20,9 @@ LOG="${LOG_DIR}/monitor.out"
 # PATH — чтобы монитор находил nexxusd и системные утилиты.
 export PATH="${HOME}/build/bin:${PATH}"
 
+# webkit2gtk на некоторых Wayland/Xvfb рендерит webview чёрным — отключаем DMABUF
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+
 # Графика: ничего не подставляем насильно. X11-сессия использует DISPLAY
 # из .desktop, Wayland-сессия — WAYLAND_DISPLAY из .desktop.
 # Принудительный export WAYLAND_DISPLAY=wayland-0 ломал запуск в
