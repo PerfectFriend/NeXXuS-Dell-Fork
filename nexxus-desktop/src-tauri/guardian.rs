@@ -79,6 +79,13 @@ pub fn api_addr() -> String {
     crate::node_config::load().api
 }
 
+/// Достаёт `result` из JSON-RPC-конверта, который возвращает api_call.
+/// Без этого монитор читал поля верхнего уровня и всегда получал None:
+/// PoR всегда был «ПРОВАЛЕН», а бэкап падал и повторялся каждый тик.
+pub fn api_result(v: &serde_json::Value) -> &serde_json::Value {
+    v.get("result").unwrap_or(v)
+}
+
 /// ws:// URL локального API ноды.
 pub fn api_url() -> String {
     format!("ws://{}", api_addr())
@@ -207,6 +214,7 @@ pub fn external_media_dir() -> Option<std::path::PathBuf> {
 /// Возвращает (имя бэкапа, сколько удалено, путь внешней копии).
 pub async fn run_auto_backup(keep: usize) -> Result<(String, usize, Option<String>), String> {
     let created = api_call("node_backup", None).await?;
+    let created = api_result(&created);
     let name = created
         .get("name")
         .and_then(|v| v.as_str())
@@ -216,6 +224,7 @@ pub async fn run_auto_backup(keep: usize) -> Result<(String, usize, Option<Strin
     // Ротация: список newest-first, удаляем хвост сверх keep.
     let mut deleted = 0usize;
     if let Ok(list) = api_call("node_backup_list", None).await {
+        let list = api_result(&list);
         if let Some(arr) = list.as_array() {
             let names: Vec<String> = arr
                 .iter()
@@ -342,8 +351,24 @@ pub fn start_nexxusd() -> Result<(), String> {
         return Ok(());
     }
 
-    // Нода под управлением systemd — оставляем её как есть.
-    if crate::node_unit::is_installed() && crate::node_unit::unit_state() == "active" {
+    // Нода под управлением systemd — поднимаем её ТОЛЬКО через systemctl.
+    // Раньше при неактивном юните монитор порождал «детскую» копию nexxusd
+    // вне systemd: без авторестарта, без unit-контроля и с дрейфом путей.
+    if crate::node_unit::is_installed() {
+        if crate::node_unit::unit_state() == "active" {
+            return Ok(());
+        }
+        let out = Command::new("systemctl")
+            .args(["--user", "start", crate::node_unit::NODE_UNIT_NAME])
+            .output()
+            .map_err(|e| format!("systemctl start failed: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "systemctl start {}: {}",
+                crate::node_unit::NODE_UNIT_NAME,
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
         return Ok(());
     }
 
@@ -502,6 +527,7 @@ pub async fn health_loop(state: Arc<GuardianState>) {
 
     let mut heartbeat_ticks: u64 = 0;
     let mut last_tor: String = String::new();
+    let mut por_disabled_logged = false;
 
     loop {
         sleep(Duration::from_secs(HEALTH_INTERVAL_SEC)).await;
@@ -565,10 +591,12 @@ pub async fn health_loop(state: Arc<GuardianState>) {
                     auto_backup_due(now_secs, last, cfg.auto_backup_hours)
                 };
                 if due {
+                    // Timestamp ставим ДО попытки и независимо от исхода:
+                    // иначе при ошибке бэкап повторялся на каждом тике (10 с).
+                    *state.last_auto_backup.lock().await = Some(now_secs);
                     match run_auto_backup(cfg.auto_backup_keep).await {
                         Ok((name, deleted, external)) => {
                             let _ = bot.notify_backup(&name, deleted, external.as_deref()).await;
-                            *state.last_auto_backup.lock().await = Some(now_secs);
                         }
                         Err(e) => {
                             eprintln!("guardian: auto-backup failed: {e}");
@@ -576,24 +604,35 @@ pub async fn health_loop(state: Arc<GuardianState>) {
                     }
                 }
 
-                // E2: плановый PoR по расписанию (только когда нода жива).
-                let por_due = {
-                    let last = *state.last_por.lock().await;
-                    auto_backup_due(now_secs, last, cfg.por_interval_hours)
-                };
-                if por_due {
-                    match api_call("node_por", None).await {
-                        Ok(v) => {
-                            let ok = v.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
-                            let chunk = v.get("chunk").and_then(|c| c.as_str()).unwrap_or("").to_string();
-                            let ms = v.get("elapsed_ms").and_then(|m| m.as_u64()).unwrap_or(0);
-                            let total = v.get("chunks_total").and_then(|t| t.as_u64()).unwrap_or(0);
-                            let _ = bot.notify_por(ok, &chunk, ms, total).await;
-                            if ok {
-                                *state.last_por.lock().await = Some(now_secs);
+                // E2: плановый PoR по расписанию.
+                // ВЫКЛЮЧЕН по умолчанию (node.conf: por_enabled=0), пока хранилище
+                // не починено: на пустом сторе PoR всегда падает, а timestamp
+                // обновлялся только при успехе -> оповещение сыпалось каждый тик.
+                if !cfg.por_enabled {
+                    if !por_disabled_logged {
+                        por_disabled_logged = true;
+                        ui_log("health_loop: PoR выключен (por_enabled=0) — проверка и оповещение пропущены");
+                    }
+                } else {
+                    let por_due = {
+                        let last = *state.last_por.lock().await;
+                        auto_backup_due(now_secs, last, cfg.por_interval_hours)
+                    };
+                    if por_due {
+                        // Timestamp обновляем по ЛЮБОМУ исходу (успех/провал):
+                        // иначе при провале PoR повторялся на каждом тике.
+                        *state.last_por.lock().await = Some(now_secs);
+                        match api_call("node_por", None).await {
+                            Ok(v) => {
+                                let v = api_result(&v);
+                                let ok = v.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
+                                let chunk = v.get("chunk").and_then(|c| c.as_str()).unwrap_or("").to_string();
+                                let ms = v.get("elapsed_ms").and_then(|m| m.as_u64()).unwrap_or(0);
+                                let total = v.get("chunks_total").and_then(|t| t.as_u64()).unwrap_or(0);
+                                let _ = bot.notify_por(ok, &chunk, ms, total).await;
                             }
+                            Err(e) => eprintln!("guardian: scheduled PoR failed: {e}"),
                         }
-                        Err(e) => eprintln!("guardian: scheduled PoR failed: {e}"),
                     }
                 }
             }

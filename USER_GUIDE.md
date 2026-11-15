@@ -4,6 +4,10 @@
 
 И нода, и монитор читают один файл `~/.nexxus/node.conf` (или `$NEXXUS_CONFIG_DIR/node.conf`), формат `key=value`. Приоритет: env > файл > дефолт. Единые дефолты: P2P `127.0.0.1:4001`, Local API `127.0.0.1:4010`. Если нода запущена в обход монитора — она всё равно поднимет порты из того же файла.
 
+Ключи `node.conf`: `listen`, `api`, `auditors`, `threshold`, `epoch_secs`, `tor`, `auto_backup_hours`, `auto_backup_keep`, `por_interval_hours`, **`por_enabled`**, `spec_version`, `log_path`.
+
+> `por_enabled` — по умолчанию **0** (выключен). Плановый PoR и его Telegram-оповещения отключены, пока не починено хранилище: на пустом сторе PoR падает, и монитор слал «ПРОВАЛЕН» каждый тик. Включать: `por_enabled=1` в `~/.nexxus/node.conf`.
+
 ## Быстрый старт (Linux)
 
 ```bash

@@ -51,6 +51,11 @@ pub struct NodeConfig {
     /// E2: плановый PoR (proof-of-retrievability) каждые N часов (0 = выкл, дефолт 24).
     #[serde(default = "default_por_interval_hours")]
     pub por_interval_hours: u64,
+    /// Включён ли плановый PoR и его Telegram-оповещения.
+    /// Выключен по умолчанию: на пустом сторе PoR всегда падает и оповещения
+    /// сыпались каждый тик health-loop (10 с). Включать после починки хранилища.
+    #[serde(default)]
+    pub por_enabled: bool,
     /// Версия спецификации протокола (NEXXUS_SPECIFICATION_V).
     pub spec_version: String,
     /// Путь файла лога ноды (NEXXUS_LOG).
@@ -69,6 +74,7 @@ impl Default for NodeConfig {
             auto_backup_hours: default_auto_backup_hours(),
             auto_backup_keep: default_auto_backup_keep(),
             por_interval_hours: default_por_interval_hours(),
+            por_enabled: false,
             spec_version: DEFAULT_SPEC_VERSION.to_string(),
             log_path: default_log_path().to_string_lossy().into_owned(),
         }
@@ -227,6 +233,7 @@ pub fn load_from(path: &std::path::Path) -> NodeConfig {
             "auto_backup_hours" => cfg.auto_backup_hours = value.parse().unwrap_or(cfg.auto_backup_hours),
             "auto_backup_keep" => cfg.auto_backup_keep = value.parse().unwrap_or(cfg.auto_backup_keep),
             "por_interval_hours" => cfg.por_interval_hours = value.parse().unwrap_or(cfg.por_interval_hours),
+            "por_enabled" => cfg.por_enabled = !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "no"),
             "spec_version" => cfg.spec_version = value.to_string(),
             "log_path" => cfg.log_path = value.to_string(),
             _ => {}
@@ -249,7 +256,7 @@ pub fn save_to(cfg: &NodeConfig, path: &std::path::Path) -> Result<(), String> {
     let tmp = path.with_extension("conf.tmp");
 
     let body = format!(
-        "listen={}\napi={}\nauditors={}\nthreshold={}\nepoch_secs={}\ntor={}\nauto_backup_hours={}\nauto_backup_keep={}\npor_interval_hours={}\nspec_version={}\nlog_path={}\n",
+        "listen={}\napi={}\nauditors={}\nthreshold={}\nepoch_secs={}\ntor={}\nauto_backup_hours={}\nauto_backup_keep={}\npor_interval_hours={}\npor_enabled={}\nspec_version={}\nlog_path={}\n",
         cfg.listen,
         cfg.api,
         cfg.auditors.join(","),
@@ -259,6 +266,7 @@ pub fn save_to(cfg: &NodeConfig, path: &std::path::Path) -> Result<(), String> {
         cfg.auto_backup_hours,
         cfg.auto_backup_keep,
         cfg.por_interval_hours,
+        if cfg.por_enabled { "1" } else { "0" },
         cfg.spec_version,
         cfg.log_path,
     );
