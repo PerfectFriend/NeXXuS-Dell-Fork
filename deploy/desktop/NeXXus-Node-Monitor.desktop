@@ -20,4 +20,4 @@ Exec=/home/thomas/Projects/NeXXus-Node/deploy/desktop/nexxus-desktop-launch
 # обработает это как штатный выход (нода остановится, процесс уйдёт).
 [Desktop Action Quit]
 Name=Полное отключение
-Exec=/home/thomas/build/cache/cargo-target-nexxus/release/nexxus-desktop --shutdown
+Exec=/home/thomas/.local/bin/nexxus-desktop --shutdown

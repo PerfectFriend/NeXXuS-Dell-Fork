@@ -13,7 +13,7 @@
 
 set -u
 
-BIN="/home/thomas/build/cache/cargo-target-nexxus/release/nexxus-desktop"
+BIN="${HOME}/.local/bin/nexxus-desktop"
 LOG_DIR="${HOME}/.nexxus"
 LOG="${LOG_DIR}/monitor.out"
 
