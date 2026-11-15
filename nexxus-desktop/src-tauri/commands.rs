@@ -108,6 +108,12 @@ pub async fn node_api_cmd(method: String, params: Option<Value>) -> Result<Value
     crate::guardian::api_call(&method, params).await
 }
 
+/// Версия сборки монитора (из Cargo.toml) — для бейджа в UI и проверки «не старый ли бинарь».
+#[command]
+pub async fn monitor_version_cmd() -> Result<String, String> {
+    Ok(env!("CARGO_PKG_VERSION").to_string())
+}
+
 /// F2: список fleet-узлов (`<config_dir>/nodes/*.conf` + их токены).
 #[command]
 pub async fn nodes_list_cmd() -> Result<Value, String> {

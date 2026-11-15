@@ -3,7 +3,7 @@
 use crate::commands::{
     guardian_check_health_cmd, guardian_restart_node_cmd, guardian_shutdown_cmd,
     guardian_start_node_cmd, guardian_status_cmd, guardian_stop_node_cmd,
-    guardian_toggle_monitor_cmd, node_api_cmd, node_config_get_cmd, node_config_set_cmd,
+    guardian_toggle_monitor_cmd, monitor_version_cmd, node_api_cmd, node_config_get_cmd, node_config_set_cmd,
     nodes_list_cmd, node_api_to_cmd,
     node_config_validate_cmd, node_install_cmd, node_install_status_cmd, node_log_tail_cmd,
     node_uninstall_cmd, onboarding_advance_cmd, onboarding_get_cmd, onboarding_reset_cmd,
@@ -224,6 +224,7 @@ fn main() {
             tg_config_save_cmd,
             tg_config_check_cmd,
             node_api_cmd,
+            monitor_version_cmd,
             nodes_list_cmd,
             node_api_to_cmd,
             selftest_cmd,

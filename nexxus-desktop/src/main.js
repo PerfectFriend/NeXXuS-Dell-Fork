@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import { getVersion } from '@tauri-apps/api/app';
 import { render as renderOverview } from './views/overview.js';
 import { formatUptime, formatBytes } from './format.js';
 
@@ -677,10 +676,17 @@ async function init() {
   addStageLog('Гардиан инициализирован.', 'info');
   bindFleetSelect();
   renderApiTab();
-  getVersion().then((v) => {
+  try {
+    const v = await invoke('monitor_version_cmd');
     const el = document.getElementById('monitor-ver');
     if (el) el.textContent = `монитор v${v}`;
-  }).catch(() => {});
+    document.title = `NeXXus Node Monitor v${v}`;
+  } catch (e) {
+    // фолбэк: версия из заголовка окна (set_title в Rust setup)
+    const m = (document.title || '').match(/v([\d.]+)/);
+    const el = document.getElementById('monitor-ver');
+    if (el && m) el.textContent = `монитор v${m[1]}`;
+  }
   await refreshFleetList();
   await fetchStatus();
   await fetchOnboarding();
