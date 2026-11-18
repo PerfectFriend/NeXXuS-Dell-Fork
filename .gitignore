@@ -24,3 +24,6 @@ target/
 /update
 /doctor
 /nexxus-desktop/doctor
+
+# build-артефакты мобильного приложения не в репозитории
+nexxus-mobile/app/build/
