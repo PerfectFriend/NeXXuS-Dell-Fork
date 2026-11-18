@@ -8,6 +8,7 @@
 //!   - отправка событий в Telegram через TelegramBot
 
 use crate::telegram::get_bot;
+use crate::process_backend::ProcessBackend;
 use serde_json::{json, Value};
 use std::process::Command;
 use std::sync::Arc;
@@ -122,6 +123,60 @@ pub struct NodeStatus {
     pub api_reachable: bool,
 }
 
+/// G5: путь к файлу состояния монитора (last_auto_backup/last_por),
+/// чтобы они переживали перезапуск процесса монитора.
+pub fn monitor_state_path() -> std::path::PathBuf {
+    crate::paths::data_dir().join("monitor-state.json")
+}
+
+/// G5: читает (last_auto_backup, last_por) из monitor-state.json.
+pub fn load_monitor_state() -> (Option<u64>, Option<u64>) {
+    let Ok(content) = std::fs::read_to_string(monitor_state_path()) else {
+        return (None, None);
+    };
+    let v: serde_json::Value = serde_json::from_str(&content).unwrap_or(serde_json::Value::Null);
+    let get = |k: &str| v.get(k).and_then(|x| x.as_u64());
+    (get("last_auto_backup"), get("last_por"))
+}
+
+/// G5: атомарная запись monitor-state.json сразу с mode 0o600
+/// (как api_auth.rs: tmp-файл с правами → rename).
+pub fn save_monitor_state(last_auto_backup: Option<u64>, last_por: Option<u64>) {
+    let path = monitor_state_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let body = serde_json::json!({
+        "last_auto_backup": last_auto_backup,
+        "last_por": last_por,
+    });
+    let tmp = path.with_extension("json.tmp");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true).truncate(true).mode(0o600);
+        if let Ok(mut f) = opts.open(&tmp) {
+            use std::io::Write;
+            let _ = f.write_all(body.to_string().as_bytes());
+            let _ = f.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::fs::write(&tmp, body.to_string());
+    }
+    let _ = std::fs::rename(&tmp, &path);
+}
+
+/// G5: сохраняет обе отметки из состояния (вызывается после их обновления).
+pub async fn persist_timestamps(state: &GuardianState) {
+    let a = { *state.last_auto_backup.lock().await };
+    let p = { *state.last_por.lock().await };
+    // Писать в фоне не блокируем: маленький файл, но делаем через spawn_blocking.
+    let _ = tokio::task::spawn_blocking(move || save_monitor_state(a, p)).await;
+}
+
 /// Текущее состояние гардиана.
 pub struct GuardianState {
     pub state: Mutex<MonitorState>,
@@ -146,8 +201,9 @@ impl GuardianState {
             health_failures: Mutex::new(0),
             nexxusd_pid: Mutex::new(None),
             monitor_enabled: Mutex::new(true),
-            last_auto_backup: Mutex::new(None),
-            last_por: Mutex::new(None),
+            // G5: отметки переживают перезапуск монитора
+            last_auto_backup: Mutex::new(load_monitor_state().0),
+            last_por: Mutex::new(load_monitor_state().1),
         }
     }
 }
@@ -243,8 +299,15 @@ pub async fn run_auto_backup(keep: usize) -> Result<(String, usize, Option<Strin
         if std::fs::create_dir_all(&dst_dir).is_ok() {
             let src = crate::node_config::config_dir().join("backups").join(&name);
             let dst = dst_dir.join(&name);
-            if src.is_dir() && copy_dir_recursive(&src, &dst).is_ok() {
-                external = Some(dst.to_string_lossy().into_owned());
+            // G3: копирование каталога — блокирующая операция, уводим из рантайма.
+            let dst_str = dst.to_string_lossy().into_owned();
+            let copied = tokio::task::spawn_blocking(move || {
+                src.is_dir() && copy_dir_recursive(&src, &dst).is_ok()
+            })
+            .await
+            .unwrap_or(false);
+            if copied {
+                external = Some(dst_str);
             }
         }
     }
@@ -533,6 +596,7 @@ pub async fn health_loop(state: Arc<GuardianState>) {
                     // Timestamp ставим ДО попытки и независимо от исхода:
                     // иначе при ошибке бэкап повторялся на каждом тике (10 с).
                     *state.last_auto_backup.lock().await = Some(now_secs);
+                    persist_timestamps(&state).await; // G5: на диск, не только в память
                     match run_auto_backup(cfg.auto_backup_keep).await {
                         Ok((name, deleted, external)) => {
                             let _ = bot.notify_backup(&name, deleted, external.as_deref()).await;
@@ -561,6 +625,7 @@ pub async fn health_loop(state: Arc<GuardianState>) {
                         // Timestamp обновляем по ЛЮБОМУ исходу (успех/провал):
                         // иначе при провале PoR повторялся на каждом тике.
                         *state.last_por.lock().await = Some(now_secs);
+                        persist_timestamps(&state).await; // G5
                         match api_call("node_por", None).await {
                             Ok(v) => {
                                 let v = api_result(&v);
@@ -632,7 +697,12 @@ pub async fn guardian_start_node(state: Arc<GuardianState>) -> Result<Value, Str
     let bot = get_bot().await;
     let _ = bot.notify_node_starting().await;
 
-    if let Err(e) = start_nexxusd() {
+    // G3: синхронный start (pgrep/systemctl/TCP-проверка) — в spawn_blocking,
+    // чтобы не блокировать рантайм монитора.
+    let start_res = tokio::task::spawn_blocking(start_nexxusd)
+        .await
+        .unwrap_or_else(|e| Err(format!("join: {e}")));
+    if let Err(e) = start_res {
         set_state_and_notify(&state.state, MonitorState::Unhealthy, || async {
             let _ = bot.notify_node_start_failed(&e).await;
         })
@@ -646,6 +716,16 @@ pub async fn guardian_start_node(state: Arc<GuardianState>) -> Result<Value, Str
         })
         .await;
         return Err("API не отвечает после запуска nexxusd".into());
+    }
+
+    // G4: запоминаем PID ноды (systemd MainPID или child.id)
+    {
+        let pid = tokio::task::spawn_blocking(|| {
+            crate::process_backend::SystemdBackend.main_pid()
+        })
+        .await
+        .unwrap_or(None);
+        *state.nexxusd_pid.lock().await = pid;
     }
 
     match get_node_status().await {
@@ -685,12 +765,49 @@ pub async fn guardian_check_health(state: Arc<GuardianState>) -> Result<Value, S
 }
 
 /// Перезапускает ноду.
+///
+/// G2: при установленном systemd-юните — `systemctl --user restart`
+/// (с новым PID и авторестартом); `pkill -f` — только для ветки без юнита.
+/// G3: синхронные операции — в spawn_blocking.
 pub async fn guardian_restart_node(state: Arc<GuardianState>) -> Result<Value, String> {
     let bot = get_bot().await;
     let _ = bot.notify_node_restarting("Ручной перезапуск").await;
 
-    // Убиваем nexxusd
-    let _ = Command::new("pkill").args(["-f", "nexxusd.*store.redb"]).status();
+    let pid_before = { *state.nexxusd_pid.lock().await };
+    let restart_res = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let backend = crate::process_backend::SystemdBackend;
+        if crate::node_unit::is_installed() {
+            // G2: юнит перезапускает systemd — новый MainPID подхватим после.
+            let out = Command::new("systemctl")
+                .args(["--user", "restart", crate::node_unit::NODE_UNIT_NAME])
+                .output()
+                .map_err(|e| format!("systemctl restart failed: {e}"))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "systemctl restart {}: {}",
+                    crate::node_unit::NODE_UNIT_NAME,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            Ok(())
+        } else {
+            // Без юнита: stop по PID (G4), затем start; pkill — только фолбэк.
+            if let Some(p) = pid_before {
+                let _ = Command::new("kill").arg(p.to_string()).status();
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            backend.stop()?;
+            let cfg = crate::node_config::load();
+            let log = std::path::PathBuf::from(nexxusd_log());
+            backend.start(&cfg, &nexxusd_bin(), &nexxusd_store(), &log)
+        }
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("join: {e}")));
+    if let Err(e) = restart_res {
+        let _ = bot.notify_node_start_failed(&format!("Перезапуск: {e}")).await;
+        return Err(e);
+    }
     sleep(Duration::from_secs(2)).await;
 
     guardian_start_node(state).await
@@ -702,7 +819,20 @@ pub async fn guardian_stop_node(state: Arc<GuardianState>) -> Result<Value, Stri
     *state.state.lock().await = MonitorState::Stopped;
     let bot = get_bot().await;
     let _ = bot.notify_node_stopping().await;
-    let result = stop_nexxusd();
+    // G3+G4: stop в spawn_blocking; без юнита — сначала kill по запомненному PID.
+    let pid = { *state.nexxusd_pid.lock().await };
+    let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        if pid.is_some() && !crate::node_unit::is_installed() {
+            if let Some(p) = pid {
+                let _ = Command::new("kill").arg(p.to_string()).status();
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
+        stop_nexxusd()
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("join: {e}")));
+    *state.nexxusd_pid.lock().await = None;
     match &result {
         Ok(_) => {
             let _ = bot.notify_node_stopped().await;
