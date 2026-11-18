@@ -1,7 +1,24 @@
-# External Audit Package — NeXXus Node v2.0.0-prototype (2026-11-14)
+# External Audit Package — NeXXus Node 0.228.0 (обновлено 2026-11-18)
 
 Для внешнего аудитора (Grok). Цель: честная карта проекта — что реализовано,
 как это проверить самостоятельно, что сознательно НЕ сделано.
+
+## 0. Как получить код (S3 — обязательно)
+
+**Полную историю `main` давать нельзя**: в ней есть ротированные/рабочие
+Telegram-токены (см. `docs/DEP-03-secret-rotation.md`, перепроверка 2026-11-18).
+Канонический артефакт раздачи — **squash-mirror: один коммит, без истории**.
+
+```bash
+# из локального клона пересобрать самому:
+mkdir squash && git archive main | tar -x -C squash
+cd squash && git init -q -b auditor-squash && git add -A
+git -c user.name=auditor -c user.email=auditor@local commit -m "RC1 squash"
+# либо взять готовый tar.gz у владельца (NeXXus-Node-audit-squash.tar.gz)
+```
+
+Проверено 2026-11-18: squash = 1 коммит, строгий скан секретов → 0 хитов,
+redb-файлов → 0.
 
 ## 1. Что это
 
