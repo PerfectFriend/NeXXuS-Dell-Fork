@@ -189,8 +189,30 @@ pub fn auto_backup_due(now_secs: u64, last: Option<u64>, hours: u64) -> bool {
 
 /// D2: ротация — список имён (newest-first), которые надо удалить, чтобы
 /// осталось не больше `keep` последних.
+///
+/// `keep = 0` не означает «удалить всё, включая свежий бэкап»: только что
+/// созданный бэкап удалять нельзя — иначе авто-бэкап лишается смысла и данные
+/// остаются без последней копии. Минимум — хранить последний (keep.max(1)).
 pub fn backups_to_delete(newest_first: &[String], keep: usize) -> Vec<String> {
-    newest_first.iter().skip(keep).cloned().collect()
+    newest_first.iter().skip(keep.max(1)).cloned().collect()
+}
+
+/// G1: зафиксировать состояние и ТОЛЬКО ПОТОМ отправить уведомление.
+///
+/// Инвариант: guard `Mutex<MonitorState>` не живёт через `.await`.
+/// Раньше лок брался и держался до конца `notify_*().await` (HTTP в Telegram),
+/// поэтому `guardian_status` — тот же мьютекс — вставал на секунды-минуты,
+/// пока Telegram недоступен: UI монитора «залипал».
+async fn set_state_and_notify<F, Fut>(lock: &Mutex<MonitorState>, next: MonitorState, notify: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    {
+        let mut guard = lock.lock().await;
+        *guard = next;
+    } // guard отпущен ДО await — лок свободен для guardian_status
+    notify().await;
 }
 
 /// D2: первый примонтированный внешний носитель под /run/media (или None).
@@ -694,16 +716,18 @@ pub async fn guardian_start_node(state: Arc<GuardianState>) -> Result<Value, Str
     let _ = bot.notify_node_starting().await;
 
     if let Err(e) = start_nexxusd() {
-        let mut state_lock = state.state.lock().await;
-        *state_lock = MonitorState::Unhealthy;
-        let _ = bot.notify_node_start_failed(&e).await;
+        set_state_and_notify(&state.state, MonitorState::Unhealthy, || async {
+            let _ = bot.notify_node_start_failed(&e).await;
+        })
+        .await;
         return Err(e);
     }
 
     if !wait_for_api_ready(30).await {
-        let mut state_lock = state.state.lock().await;
-        *state_lock = MonitorState::Unhealthy;
-        let _ = bot.notify_node_start_failed("API не отвечает после запуска").await;
+        set_state_and_notify(&state.state, MonitorState::Unhealthy, || async {
+            let _ = bot.notify_node_start_failed("API не отвечает после запуска").await;
+        })
+        .await;
         return Err("API не отвечает после запуска nexxusd".into());
     }
 
@@ -711,15 +735,18 @@ pub async fn guardian_start_node(state: Arc<GuardianState>) -> Result<Value, Str
         Ok(status) => {
             *state.start_time.lock().await = Some(SystemTime::now());
             *state.node_status.lock().await = Some(status.clone());
-            let mut state_lock = state.state.lock().await;
-            *state_lock = MonitorState::Running;
-            let _ = bot.notify_node_started(&status.node_id, &api_url()).await;
+            let node_id = status.node_id.clone();
+            set_state_and_notify(&state.state, MonitorState::Running, || async {
+                let _ = bot.notify_node_started(&node_id, &api_url()).await;
+            })
+            .await;
             Ok(json!({"status": "started", "node_id": status.node_id}))
         }
         Err(e) => {
-            let mut state_lock = state.state.lock().await;
-            *state_lock = MonitorState::Unhealthy;
-            let _ = bot.notify_node_start_failed(&e).await;
+            set_state_and_notify(&state.state, MonitorState::Unhealthy, || async {
+                let _ = bot.notify_node_start_failed(&e).await;
+            })
+            .await;
             Err(e)
         }
     }
@@ -841,6 +868,84 @@ pub async fn tg_send_alert(text: &str) -> Result<Value, String> {
     }
     bot.send_message(text).await?;
     Ok(json!({"status": "sent"}))
+}
+
+#[cfg(test)]
+mod guardian_invariant_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// G1: во время await-уведомления мьютекс состояния должен быть свободен.
+    /// Раньше guard жил через `.await` → `guardian_status` (тот же мьютекс)
+    /// вставал, пока Telegram недоступен.
+    #[tokio::test]
+    async fn state_lock_is_free_during_notification() {
+        // Тот же тип мьютекса, что в GuardianState::state (tokio::sync::Mutex).
+        let lock = Mutex::new(MonitorState::Stopped);
+        let saw_free = Arc::new(AtomicBool::new(false));
+        let seen = saw_free.clone();
+        let probe: &Mutex<MonitorState> = &lock;
+
+        set_state_and_notify(&lock, MonitorState::Running, || async move {
+            // «уведомление» в Telegram висит — лок обязан быть свободен
+            match probe.try_lock() {
+                Ok(g) => {
+                    assert!(
+                        matches!(*g, MonitorState::Running),
+                        "состояние должно быть зафиксировано ДО уведомления"
+                    );
+                    seen.store(true, Ordering::SeqCst);
+                }
+                Err(_) => panic!("лок состояния удерживается во время await-уведомления"),
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        })
+        .await;
+
+        assert!(
+            saw_free.load(Ordering::SeqCst),
+            "состояние не было видно во время уведомления"
+        );
+    }
+
+    /// Контроль регрессии G1: старый паттерн (guard живёт через await)
+    /// действительно удерживает лок — значит тест выше ловит именно этот
+    /// класс дефекта, а не «проходит всегда».
+    #[tokio::test]
+    async fn old_pattern_would_hold_the_lock() {
+        let lock = Mutex::new(MonitorState::Stopped);
+        let probe: &Mutex<MonitorState> = &lock;
+        let held = {
+            let mut guard = lock.lock().await;
+            *guard = MonitorState::Running;
+            let held = probe.try_lock().is_err();
+            tokio::time::sleep(Duration::from_millis(5)).await; // await с живым guard
+            held
+        };
+        assert!(
+            held,
+            "старый паттерн должен был удерживать лок — иначе тест G1 ничего не проверяет"
+        );
+    }
+
+    /// G6: keep=0 не должен удалять свежий бэкап.
+    #[test]
+    fn backups_to_delete_keep_zero_keeps_newest() {
+        let names = vec!["b_new".to_string(), "a_old".to_string()];
+        let del = backups_to_delete(&names, 0);
+        assert_eq!(del, vec!["a_old".to_string()], "свежий бэкап нельзя удалять");
+        assert!(!del.contains(&"b_new".to_string()));
+    }
+
+    #[test]
+    fn backups_to_delete_keeps_requested_count() {
+        let names: Vec<String> = (0..5).map(|i| format!("b{i}")).collect();
+        // newest-first: b0 — самый свежий
+        assert_eq!(backups_to_delete(&names, 3), vec!["b3".to_string(), "b4".to_string()]);
+        assert!(backups_to_delete(&names, 5).is_empty());
+        assert!(backups_to_delete(&names, 9).is_empty());
+    }
 }
 
 #[cfg(test)]

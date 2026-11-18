@@ -1,0 +1,15 @@
+# Экспорт для раздачи аудиторам: git archive / squash-артефакт.
+#
+# Личная переписка и шум инструментов остаются в репозитории (история, владелец),
+# но НЕ попадают в раздаваемый squash-артефакт — внешнему аудитору нужны код,
+# документация и аудит-трейл, а не чужая переписка.
+ПерепискаТроцкогоСКауцким.MD export-ignore
+PISMO_KLAUDU_EDINOE_YADRO.md export-ignore
+OTVET_KLAUDU.md export-ignore
+Perepiska-S-Claudom.md export-ignore
+Переписка-С-Клодом.md export-ignore
+.aistudio/ export-ignore
+dist/ export-ignore
+nexxus-mobile/app/build/ export-ignore
+nexxus-mobile/.gradle/ export-ignore
+*.zip export-ignore
