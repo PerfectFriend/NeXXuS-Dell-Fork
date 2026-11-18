@@ -36,9 +36,34 @@ pub fn is_valid_token(token: &str) -> bool {
 }
 
 /// Читает токен из файла; `Ok(None)` если файла нет.
+/// P1: если файл токена доступен на чтение группой/остальными — возвращает
+/// предупреждение (режим в восьмеричном виде). Токен — единственный замок API.
+#[cfg(unix)]
+pub fn token_file_mode_issue(path: &std::path::Path) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let md = std::fs::metadata(path).ok()?;
+    let mode = md.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        Some(format!(
+            "файл токена {} имеет режим {mode:o} — ужесточите до 0600 (chmod 600)",
+            path.display()
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+pub fn token_file_mode_issue(_path: &std::path::Path) -> Option<String> {
+    None
+}
+
 pub fn load_token(path: &PathBuf) -> io::Result<Option<String>> {
     match fs::read_to_string(path) {
         Ok(content) => {
+            if let Some(w) = token_file_mode_issue(path) {
+                eprintln!("warn: {w}");
+            }
             let token = content.trim().to_string();
             if token.is_empty() {
                 Ok(None)
@@ -136,5 +161,22 @@ mod tests {
         fs::write(&path, "not-a-token").unwrap();
         assert!(load_token(&path).is_err());
         let _ = fs::remove_dir_all(path.parent().unwrap());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod p1_mode_tests {
+    #[test]
+    fn wide_token_file_mode_is_flagged() {
+        let dir = std::env::temp_dir().join(format!("nexxus-p1-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("api.token");
+        std::fs::write(&p, "ab".repeat(32)).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(super::token_file_mode_issue(&p).is_some(), "0644 должен быть замечен");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(super::token_file_mode_issue(&p).is_none(), "0600 — ок");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

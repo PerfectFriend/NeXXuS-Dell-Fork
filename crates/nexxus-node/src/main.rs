@@ -99,20 +99,30 @@ fn main() {
     // Единый конфиг с монитором: ~/.nexxus/node.conf (env перекрывает файл).
     let conf = crate::node_config::load_file();
     // NEXXUS_LISTEN — адрес для P2P соединений (не для API).
-    let listen_addr: SocketAddr = crate::node_config::cfg_or_env(&conf, "listen", "NEXXUS_LISTEN", "127.0.0.1:4001")
-        .parse()
-        .unwrap_or_else(|_| "127.0.0.1:4001".parse().unwrap());
+    // P1: тихий откат на дефолт при нечитаемом адресе давал монитору неверный порт —
+    // логируем warn с именем ключа (значение НЕ логируем).
+    let listen_addr: SocketAddr = {
+        let raw = crate::node_config::cfg_or_env(&conf, "listen", "NEXXUS_LISTEN", "127.0.0.1:4001");
+        raw.parse().unwrap_or_else(|_| {
+            eprintln!("warn: listen (NEXXUS_LISTEN) не распарсен как SocketAddr — дефолт 127.0.0.1:4001 (значение не логируется)");
+            "127.0.0.1:4001".parse().unwrap()
+        })
+    };
 
     // NEXXUS_API_ADDR — адрес для локального WebSocket API (для nexxus-desktop).
     // Дефолт 4010 единый для ноды и монитора.
-    let api_addr: SocketAddr = crate::node_config::cfg_or_env(
-        &conf,
-        "api",
-        "NEXXUS_API_ADDR",
-        crate::local_api::DEFAULT_API_ADDR,
-    )
-    .parse()
-    .unwrap_or_else(|_| crate::local_api::DEFAULT_API_ADDR.parse().unwrap());
+    let api_addr: SocketAddr = {
+        let raw = crate::node_config::cfg_or_env(
+            &conf,
+            "api",
+            "NEXXUS_API_ADDR",
+            crate::local_api::DEFAULT_API_ADDR,
+        );
+        raw.parse().unwrap_or_else(|_| {
+            eprintln!("warn: api (NEXXUS_API_ADDR) не распарсен как SocketAddr — дефолт {} (значение не логируется)", crate::local_api::DEFAULT_API_ADDR);
+            crate::local_api::DEFAULT_API_ADDR.parse().unwrap()
+        })
+    };
 
     // --- Комитет аудиторов (фаза 4): NEXXUS_AUDITORS=hex,hex,... NEXXUS_THRESHOLD=M ---
     // Без реестра и порога кворум не достигается никогда (deny-by-default).

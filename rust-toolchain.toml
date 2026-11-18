@@ -1,3 +1,4 @@
+# P1: версия зафиксирована для воспроизводимого аудита (было "stable").
 [toolchain]
-channel = "stable"
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]

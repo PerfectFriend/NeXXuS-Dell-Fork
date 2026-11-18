@@ -488,7 +488,7 @@ async function storeInfo() {
       'bound': s.bound_addr || '—',
       'аптайм': formatUptime(s.uptime_ms || 0),
       'paused': s.paused ? 'да' : 'нет',
-      'store': '/home/thomas/.nexxus/store.redb',
+      'store': s.store || s.store_path || '—',
       'log': cfg.log_path,
     });
   } catch (e) {

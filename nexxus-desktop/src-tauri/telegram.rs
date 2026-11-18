@@ -13,15 +13,34 @@ pub struct TelegramBot {
     client: Client,
     token: Option<String>,
     chat_id: Option<String>,
+    /// База Telegram API; в тестах подменяется на закрытый порт.
+    base_url: String,
 }
 
 impl TelegramBot {
+    /// Тестовый конструктор: произвольная база API (закрытый порт).
+    #[cfg(test)]
+    pub(crate) fn with_base_url(base_url: &str, token: &str) -> Self {
+        Self {
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_millis(500))
+                .timeout(std::time::Duration::from_secs(2))
+                .build()
+                .expect("client"),
+            token: Some(token.to_string()),
+            chat_id: Some("1".to_string()),
+            base_url: base_url.to_string(),
+        }
+    }
+
     pub fn new() -> Self {
         // Токен: env → secrets-файл проекта → ~/.nexxus/telegram.json (вводится из UI).
         // Значение никогда не логируется и не попадает в конфиги.
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
         let json_cfg = read_json_config();
         let token = std::env::var("NEXXUS_TG_BOT_TOKEN").ok().filter(|t| !t.is_empty()).or(json_cfg.0).or_else(|| {
+            // Чтение secrets-файла ВНЕШНЕГО инструмента (Hermes Agent) — осознанный fallback,
+            // унаследованный от домашней инфраструктуры; значение не логируется и не пишется в git.
             std::fs::read_to_string(format!("{home}/.hermes/secrets/cathedral_bot_token"))
                 .ok()
                 .map(|s| s.trim().to_string())
@@ -42,6 +61,7 @@ impl TelegramBot {
             });
 
         Self {
+            base_url: "https://api.telegram.org".to_string(),
             // Таймауты обязательны: без них зависший Telegram-запрос блокировал
             // «полное отключение» — процесс не доходил до выгрузки из памяти.
             client: Client::builder()
@@ -68,7 +88,7 @@ impl TelegramBot {
             None => return Err("Telegram chat ID not configured".into()),
         };
 
-        let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+        let url = format!("{}/bot{token}/sendMessage", self.base_url);
         let payload = json!({
             "chat_id": chat_id,
             "text": text,
@@ -77,7 +97,8 @@ impl TelegramBot {
         });
 
         let response = self.client.post(&url).json(&payload).send().await
-            .map_err(|e| format!("Telegram request failed: {e}"))?;
+            // P1: reqwest-ошибка содержит URL, а в URL — токен; without_url() его вырезает.
+            .map_err(|e| format!("Telegram request failed: {}", e.without_url()))?;
 
         if response.status().is_success() {
             Ok(())
@@ -240,13 +261,24 @@ pub fn save_telegram_config(bot_token: &str, chat_id: &str) -> Result<(), String
     })).map_err(|e| format!("serialize: {e}"))?;
     {
         use std::io::Write;
-        let mut f = std::fs::File::create(&tmp).map_err(|e| format!("create: {e}"))?;
-        f.write_all(text.as_bytes()).map_err(|e| format!("write: {e}"))?;
+        // P1: файл с токеном создаём СРАЗУ с mode 0o600 (а не chmod после записи —
+        // между create и chmod файл был доступен на чтение другим пользователям).
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| format!("chmod: {e}"))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+                .map_err(|e| format!("create: {e}"))?;
+            f.write_all(text.as_bytes()).map_err(|e| format!("write: {e}"))?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut f = std::fs::File::create(&tmp).map_err(|e| format!("create: {e}"))?;
+            f.write_all(text.as_bytes()).map_err(|e| format!("write: {e}"))?;
         }
     }
     std::fs::rename(&tmp, &path).map_err(|e| format!("rename: {e}"))?;
@@ -289,7 +321,7 @@ pub async fn check_bot_token(bot_token: &str) -> Result<serde_json::Value, Strin
         .build()
         .map_err(|e| e.to_string())?;
     let url = format!("https://api.telegram.org/bot{token}/getMe");
-    let resp = client.get(&url).send().await.map_err(|e| format!("getMe: {e}"))?;
+    let resp = client.get(&url).send().await.map_err(|e| format!("getMe: {}", e.without_url()))?;
     let v: serde_json::Value = resp.json().await.map_err(|e| format!("getMe json: {e}"))?;
     if v.get("ok").and_then(|o| o.as_bool()) == Some(true) {
         Ok(v.get("result").cloned().unwrap_or(serde_json::Value::Null))
@@ -348,5 +380,26 @@ mod config_tests {
         with_temp_dir(|| {
             assert_eq!(read_json_config(), (None, None));
         });
+    }
+}
+
+#[cfg(test)]
+mod p1_tests {
+    use super::*;
+
+    /// P1: токен не должен попадать в текст ошибки reqwest (URL с токеном вырезается).
+    #[tokio::test]
+    async fn token_never_leaks_into_error_text() {
+        // Закрытый порт: connect refused — reqwest вернёт ошибку С URL в тексте.
+        let bot = TelegramBot::with_base_url("http://127.0.0.1:1", "SECRETTOKEN123");
+        let err = bot
+            .send_message("ping")
+            .await
+            .expect_err("запрос на закрытый порт должен упасть");
+        assert!(
+            !err.contains("SECRETTOKEN123"),
+            "токен утёк в текст ошибки: {err}"
+        );
+        assert!(!err.contains("botSECRETTOKEN123"), "URL с токеном в ошибке: {err}");
     }
 }

@@ -2,7 +2,8 @@
 Name=NeXXus Node Monitor
 GenericName=NeXXus Node Guardian
 Comment=Монитор ноды NeXXus: запуск из ярлыка, контроль здоровья, отчёты в Telegram (без автозагрузки — только ручной запуск)
-Exec=/home/thomas/Projects/NeXXus-Node/deploy/desktop/nexxus-desktop-launch
+# Exec ниже — по имени из PATH (~/.local/bin добавляется при установке)
+Exec=nexxus-desktop-launch
 Icon=nexxus-desktop
 Terminal=false
 Type=Application
@@ -14,10 +15,11 @@ Actions=Show;Quit
 
 [Desktop Action Show]
 Name=Показать панель управления
-Exec=/home/thomas/Projects/NeXXus-Node/deploy/desktop/nexxus-desktop-launch
+# Exec ниже — по имени из PATH (~/.local/bin добавляется при установке)
+Exec=nexxus-desktop-launch
 
 # Полное отключение — через lock-файл: если монитор запущен, он сам
 # обработает это как штатный выход (нода остановится, процесс уйдёт).
 [Desktop Action Quit]
 Name=Полное отключение
-Exec=/home/thomas/.local/bin/nexxus-desktop --shutdown
+Exec=nexxus-desktop --shutdown
