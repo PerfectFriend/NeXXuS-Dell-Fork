@@ -7,8 +7,12 @@
 //!   `stop()` убивает его по PID, `Drop` делает kill_on_drop. Никаких
 //!   pkill/systemctl, никаких общих путей.
 
+#![cfg_attr(not(test), allow(dead_code))]
+
 use crate::node_config::NodeConfig;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
