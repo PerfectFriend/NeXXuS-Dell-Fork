@@ -32,7 +32,16 @@ function call(method, params) {
 $('btn-connect').onclick = () => {
   const addr = $('addr').value.trim();
   const token = $('token').value.trim();
-  if (!addr.startsWith('ws://')) return log('адрес должен начинаться с ws://', 'err');
+  // Аудит H-18: принимается только wss:// (шифрование) либо ws:// для
+  // loopback-стенда (127.0.0.1 / localhost / 10.0.2.2 — эмулятор).
+  const isWss = addr.startsWith('wss://');
+  const isWs = addr.startsWith('ws://');
+  if (!isWss && !isWs) return log('адрес должен начинаться с wss:// (или ws:// для localhost)', 'err');
+  if (isWs) {
+    const hostPart = addr.slice('ws://'.length).split(/[:/?#]/)[0].toLowerCase();
+    const loopback = ['127.0.0.1', 'localhost', '10.0.2.2', '[::1]'].includes(hostPart);
+    if (!loopback) return log('ws:// разрешён только для localhost; для сети используйте wss://', 'err');
+  }
   if (!token) return log('нужен API token', 'err');
   try { ws && ws.close(); } catch (e) {}
   log(`connect ${addr} …`);

@@ -123,11 +123,27 @@ pub fn inverse_for_shards(surviving: &[usize]) -> Result<[[u8; 4]; 4], NexxusErr
             got: surviving.len(),
         });
     }
+    // M-13: обратная матрица кэшируется по битовой маске, то есть строки
+    // соответствуют индексам в возрастающем порядке. Требование строгого
+    // возрастания делает это соответствие явным: иначе вызывающий код мог
+    // применить матрицу к строкам в другом порядке и получить неверные данные.
     let mut mask = 0u8;
+    let mut prev: Option<usize> = None;
     for &i in surviving {
         if i >= 6 {
             return Err(NexxusError::Io(format!("shard index {i} out of range")));
         }
+        if let Some(p) = prev {
+            if i == p {
+                return Err(NexxusError::Io(format!("duplicate shard index {i}")));
+            }
+            if i < p {
+                return Err(NexxusError::Io(
+                    "shard indices must be strictly ascending".into(),
+                ));
+            }
+        }
+        prev = Some(i);
         mask |= 1 << i;
     }
     INVERSE_CACHE[mask as usize]

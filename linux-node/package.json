@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node nexxus.mjs start",
-    "test": "node test-crypto.mjs && node test-pair.mjs"
+    "test": "node test-crypto.mjs && node test-pair.mjs && node test-http-security.mjs"
   },
   "engines": {
     "node": ">=22"

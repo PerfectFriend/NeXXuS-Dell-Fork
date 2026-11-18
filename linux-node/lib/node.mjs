@@ -219,12 +219,24 @@ export async function createNode(opts) {
       o += b.length;
     }
     incomingFiles.delete(obj.id);
-    await storePlainFile({ id: obj.id, name: meta.name, bytes: plain, from: fp });
+    await storePlainFile({ id: obj.id, name: meta.name, bytes: plain, from: fp, remoteId: obj.id });
     pushLog(`Файл ${meta.name} принят и записан в сейф.`);
   }
 
-  async function storePlainFile({ id, name, bytes, from }) {
-    const fileId = String(id || randomUUID()).replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 80) || randomUUID();
+  // Идентификатор файла — только наш локальный, строгий формат (аудит H-17).
+  // Никаких «..», слэшей и точек: id подставляется в путь vault/<id> и в
+  // команды удаления, поэтому мусорный id = обход каталога.
+  const FILE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  function safeFileId(raw) {
+    const s = String(raw ?? "");
+    return FILE_ID_RE.test(s) ? s : "";
+  }
+
+  async function storePlainFile({ id, name, bytes, from, remoteId }) {
+    // Файл, пришедший от пира, получает СВОЙ локальный id: id отправителя
+    // не должен ни перезаписывать существующий локальный файл, ни задавать путь.
+    const requested = safeFileId(id);
+    const fileId = from ? randomUUID() : (requested || randomUUID());
     const dir = path.join(dataDir, "vault", fileId);
     await ensureDir(dir);
     const hash = hashBytes(bytes);
@@ -243,6 +255,9 @@ export async function createNode(opts) {
       at: Date.now(),
       from: from ?? null,
     };
+    // id отправителя (если был) сохраняем как метаданные, но он НЕ является
+    // локальным идентификатором файла.
+    if (from) rec.remoteId = String(remoteId ?? requested).slice(0, 80);
     files = [rec, ...files.filter((f) => f.id !== fileId)];
     await writeJson(path.join(dataDir, "files.json"), files);
     emit();
@@ -250,9 +265,11 @@ export async function createNode(opts) {
   }
 
   async function loadPlainFile(id) {
-    const rec = files.find((f) => f.id === id);
+    const safeId = safeFileId(id);
+    if (!safeId) throw new Error("Некорректный идентификатор файла.");
+    const rec = files.find((f) => f.id === safeId);
     if (!rec) throw new Error("Файл не найден.");
-    const dir = path.join(dataDir, "vault", id);
+    const dir = path.join(dataDir, "vault", safeId);
     const parts = [];
     for (let i = 0; i < rec.chunks; i++) {
       const packed = new Uint8Array(await readFile(path.join(dir, `c-${String(i).padStart(5, "0")}.bin`)));
@@ -313,9 +330,11 @@ export async function createNode(opts) {
   }
 
   async function removeFile(id) {
-    files = files.filter((f) => f.id !== id);
+    const safeId = safeFileId(id);
+    if (!safeId) throw new Error("Некорректный идентификатор файла.");
+    files = files.filter((f) => f.id !== safeId);
     await writeJson(path.join(dataDir, "files.json"), files);
-    await rm(path.join(dataDir, "vault", id), { recursive: true, force: true });
+    await rm(path.join(dataDir, "vault", safeId), { recursive: true, force: true });
     emit();
   }
 

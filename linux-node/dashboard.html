@@ -141,7 +141,63 @@
       let active = null;
       let hideSeed = false;
 
-      const api = (p, opt) => fetch(p, opt).then(async (r) => {
+      // Bearer-токен панели (аудит H-16): хранится в localStorage, каждый
+      // запрос к API идёт с заголовком Authorization.
+      const tokenKey = "nexxus.panel.token";
+      function panelToken() {
+        try { return localStorage.getItem(tokenKey) || ""; } catch { return ""; }
+      }
+      function setPanelToken(v) {
+        try { v ? localStorage.setItem(tokenKey, v) : localStorage.removeItem(tokenKey); } catch { /* ignore */ }
+      }
+      function authHeaders(extra = {}) {
+        const t = panelToken();
+        return t ? { ...extra, authorization: `Bearer ${t}` } : extra;
+      }
+
+      // Экран ввода токена: без него API вернёт 401.
+      function tokenGate() {
+        const t = panelToken();
+        if (t) return;
+        const box = document.createElement("div");
+        box.style.cssText = "position:fixed;inset:0;display:flex;align-items:center;justify-content:center;"
+          + "background:rgba(5,8,12,.92);z-index:9999;font:14px system-ui,sans-serif;color:#e6edf3";
+        box.innerHTML = '<div style="max-width:420px;padding:24px;border:1px solid #243040;border-radius:12px;background:#0b1118">'
+          + '<div style="font-size:17px;margin-bottom:10px">Токен панели</div>'
+          + '<div style="opacity:.75;margin-bottom:12px">Введите NEXXUS_PANEL_TOKEN — он хранится только в localStorage этого браузера.</div>'
+          + '<input id="tokInput" type="password" placeholder="bearer-токен" '
+          + 'style="width:100%;box-sizing:border-box;padding:9px 11px;border-radius:8px;border:1px solid #243040;background:#0d1620;color:#e6edf3">'
+          + '<button id="tokSave" style="margin-top:12px;width:100%;padding:10px;border-radius:8px;border:0;background:#2f81f7;color:#fff;font-weight:600;cursor:pointer">Сохранить и войти</button>'
+          + '<div id="tokErr" style="margin-top:10px;color:#ff7b72;font-size:13px"></div></div>';
+        document.body.appendChild(box);
+        const input = box.querySelector("#tokInput");
+        const save = async () => {
+          const v = input.value.trim();
+          if (!v) return;
+          setPanelToken(v);
+          try {
+            const r = await fetch("/api/state", { headers: authHeaders() });
+            if (!r.ok) throw new Error(String(r.status));
+            box.remove();
+            location.reload();
+          } catch {
+            box.querySelector("#tokErr").textContent = "Токен не принят (проверьте значение и что нода запущена с этим токеном).";
+          }
+        };
+        box.querySelector("#tokSave").onclick = save;
+        input.onkeydown = (e) => { if (e.key === "Enter") save(); };
+        input.focus();
+      }
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", tokenGate);
+      } else {
+        tokenGate();
+      }
+
+      const api = (p, opt = {}) => fetch(p, {
+        ...opt,
+        headers: authHeaders(opt.headers || {}),
+      }).then(async (r) => {
         const t = await r.text();
         let d; try { d = JSON.parse(t); } catch { d = t; }
         if (!r.ok) throw new Error(d.error || t || r.status);
@@ -234,7 +290,11 @@
         const file = e.target.files[0];
         e.target.value = "";
         if (!file) return;
-        await fetch("/api/files", { method: "POST", headers: { "x-filename": encodeURIComponent(file.name) }, body: file });
+        await fetch("/api/files", {
+          method: "POST",
+          headers: authHeaders({ "x-filename": encodeURIComponent(file.name) }),
+          body: file,
+        });
         await tick();
       };
       $("files").onclick = async (e) => {

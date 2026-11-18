@@ -52,6 +52,33 @@ pub fn encode(data: &[u8]) -> [Shard; TOTAL_SHARDS] {
     shards
 }
 
+/// Нормализует список шардов перед восстановлением (M-13).
+///
+/// Инварианты:
+///   1) каждый индекс в диапазоне 0..TOTAL_SHARDS;
+///   2) индексы уникальны (иначе данные неоднозначны);
+///   3) индексы строго возрастают — обратная матрица `inverse_for_shards`
+///      строится по битовой маске, то есть в порядке возрастания индексов.
+///      Если порядок аргументов не совпадал с порядком строк матрицы,
+///      восстановление возвращало **неверные данные без ошибки**.
+fn normalize_shards<'a>(shards: &[(&'a [u8], usize)]) -> Result<Vec<(&'a [u8], usize)>, NexxusError> {
+    for (_, idx) in shards {
+        if *idx >= TOTAL_SHARDS {
+            return Err(NexxusError::Io(format!("shard index {idx} out of range")));
+        }
+    }
+    let mut seen = [false; TOTAL_SHARDS];
+    for (_, idx) in shards {
+        if seen[*idx] {
+            return Err(NexxusError::Io(format!("duplicate shard index {idx}")));
+        }
+        seen[*idx] = true;
+    }
+    let mut v: Vec<(&[u8], usize)> = shards.to_vec();
+    v.sort_by_key(|(_, idx)| *idx);
+    Ok(v)
+}
+
 /// Decode from any >=4 surviving shards back to original `original_len` bytes.
 pub fn decode(shards: &[(&[u8], usize)], original_len: usize) -> Result<Vec<u8>, NexxusError> {
     if shards.len() < DATA_SHARDS {
@@ -67,13 +94,17 @@ pub fn decode(shards: &[(&[u8], usize)], original_len: usize) -> Result<Vec<u8>,
         }
     }
 
-    let indices: Vec<usize> = shards.iter().take(4).map(|(_, idx)| *idx).collect();
+    // M-13: индексы проверяются и приводятся к возрастающему порядку —
+    // иначе обратная матрица применялась к строкам в чужом порядке
+    // и decode возвращал мусор без ошибки.
+    let ordered = normalize_shards(shards)?;
+    let indices: Vec<usize> = ordered.iter().take(4).map(|(_, idx)| *idx).collect();
     let inv = inverse_for_shards(&indices)?;
 
     let mut data = vec![0u8; original_len];
     for byte in 0..shard_len {
         let mut y = [0u8; 4];
-        for (r, (s, _)) in shards.iter().take(4).enumerate() {
+        for (r, (s, _)) in ordered.iter().take(4).enumerate() {
             y[r] = s[byte];
         }
         for c in 0..4 {
@@ -101,15 +132,16 @@ pub fn reconstruct(index: usize, surviving: &[(&[u8], usize)]) -> Result<Shard, 
     if index >= TOTAL_SHARDS {
         return Err(NexxusError::Io(format!("shard index {index} out of range")));
     }
-    let indices: Vec<usize> = surviving.iter().take(4).map(|(_, idx)| *idx).collect();
+    let ordered = normalize_shards(surviving)?;
+    let indices: Vec<usize> = ordered.iter().take(4).map(|(_, idx)| *idx).collect();
     let inv = inverse_for_shards(&indices)?;
     let g = generator_matrix();
-    let shard_len = surviving[0].0.len();
+    let shard_len = ordered[0].0.len();
 
     let mut shard = vec![0u8; shard_len];
     for byte in 0..shard_len {
         let mut y = [0u8; 4];
-        for (r, (s, _)) in surviving.iter().take(4).enumerate() {
+        for (r, (s, _)) in ordered.iter().take(4).enumerate() {
             y[r] = s[byte];
         }
         let mut x = [0u8; 4];
