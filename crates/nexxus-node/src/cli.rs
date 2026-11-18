@@ -17,6 +17,52 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+/// Единый источник правды по CLI-командам (аудит S1).
+///
+/// Раньше список команд жил в `main.rs` (`CLI_CMDS`) и не совпадал с
+/// диспетчером ниже: `doctor`, `backup`, `backups`, `restore`, `--help`
+/// в него не попадали. Первый аргумент вне списка трактовался как путь к
+/// хранилищу, и демон стартовал на файле с именем команды — в репозиторий
+/// попали четыре `redb`-хранилища (`--help`, `light`, `update`, `doctor`)
+/// с открытой мнемоникой внутри.
+///
+/// Теперь `main.rs` берёт список отсюда, а неизвестный аргумент печатает
+/// usage и завершает процесс с кодом 2.
+pub const COMMANDS: &[&str] = &[
+    "init",
+    "id",
+    "status",
+    "peers",
+    "peer",
+    "upload",
+    "download",
+    "test-por",
+    "test-interhost",
+    "logs",
+    "benchmark",
+    "update",
+    "light",
+    "doctor",
+    "backup",
+    "backups",
+    "restore",
+    "--version",
+    "--help",
+    "help",
+];
+
+/// Usage-текст CLI (печатается на неизвестную команду и на `--help`).
+pub fn usage() -> String {
+    let mut s = String::from("Usage: nexxusd <command> [args]\n\nCommands:\n");
+    for c in COMMANDS {
+        s.push_str("  ");
+        s.push_str(c);
+        s.push('\n');
+    }
+    s.push_str("\nStore path: nexxusd serve [store-path] (по умолчанию ~/.nexxus/store.redb)\n");
+    s
+}
+
 pub fn default_store() -> PathBuf {
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".nexxus").join("store.redb")
@@ -259,6 +305,12 @@ fn print_result(r: Result<Value, String>) -> i32 {
     }
 }
 
+/// S1: путь к хранилищу распознаётся строго — только `*.redb` или путь с `/`.
+/// Всё остальное считается командой; неизвестная команда → usage + код 2.
+pub fn looks_like_store_path(arg: &str) -> bool {
+    arg.ends_with(".redb") || arg.contains('/')
+}
+
 fn fail(msg: &str) -> i32 {
     eprintln!("error: {msg}");
     1
@@ -284,6 +336,14 @@ async fn async_main(args: Vec<String>) -> i32 {
         "light" => cmd_light(&rest).await,
         "--version" => {
             println!("nexxusd {}", env!("CARGO_PKG_VERSION"));
+            0
+        }
+        "--help" => {
+            print!("{}", usage());
+            0
+        }
+        "help" => {
+            print!("{}", usage());
             0
         }
         "peers" => print_result(ws_call("node_peers", json!({})).await),
@@ -690,4 +750,37 @@ fn cmd_benchmark() -> i32 {
         .unwrap()
     );
     0
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    /// S1: список COMMANDS и диспетчер не должны разъезжаться.
+    /// Иначе неизвестный аргумент снова станет путём к хранилищу.
+    #[test]
+    fn commands_list_covers_dispatcher() {
+        let src = include_str!("cli.rs");
+        for cmd in COMMANDS {
+            assert!(
+                src.contains(&format!("\"{cmd}\" =>")),
+                "команда `{cmd}` есть в COMMANDS, но её нет в диспетчере"
+            );
+        }
+    }
+
+    /// S1: неизвестный первый аргумент не должен выглядеть как путь к хранилищу.
+    #[test]
+    fn store_path_detection_is_strict() {
+        assert!(looks_like_store_path("/home/u/store.redb"));
+        assert!(looks_like_store_path("store.redb"));
+        assert!(looks_like_store_path("data/store.redb"));
+        assert!(!looks_like_store_path("doctor"));
+        assert!(!looks_like_store_path("--help"));
+        assert!(!looks_like_store_path("light"));
+        assert!(!looks_like_store_path("update"));
+        assert!(!looks_like_store_path("backup"));
+        assert!(!looks_like_store_path("backups"));
+        assert!(!looks_like_store_path("restore"));
+    }
 }

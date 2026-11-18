@@ -39,6 +39,9 @@ jobs:
       - name: wire fuzz (proptest) + golden vectors
         run: cargo test -p nexxus-core --test wire_fuzz --test wire_vectors --release
 
+      - name: "tree hygiene gate (S1 - no redb stores, no large non-asset files)"
+        run: ./scripts/check-tree-hygiene.sh
+
   desktop-gates:
     name: nexxus-desktop tests + clippy
     runs-on: ubuntu-latest

@@ -14,3 +14,13 @@ __pycache__/
 .hermes/
 target/
 **/*.rs.bk
+
+# S1: redb-хранилища не должны попадать в дерево репозитория.
+# В них лежит мнемоника (identity_mnemonic) в открытом виде.
+*.redb
+*.redb.*
+/--help
+/light
+/update
+/doctor
+/nexxus-desktop/doctor

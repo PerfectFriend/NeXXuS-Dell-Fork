@@ -70,23 +70,28 @@ fn main() {
     // test-por/test-interhost/logs/benchmark — обрабатываются в cli::run.
     // Всё остальное (или `serve`) — запуск демона; позиционный аргумент —
     // путь к файлу хранилища redb (по умолчанию ~/.nexxus/store.redb).
-    const CLI_CMDS: [&str; 14] = [
-        "init", "id", "status", "peers", "peer", "upload", "download",
-        "test-por", "test-interhost", "logs", "benchmark", "update", "light",
-        "--version",
-    ];
+    // S1: список команд — единый источник правды в cli::COMMANDS.
+    // Неизвестный аргумент больше НЕ трактуется как путь к хранилищу:
+    // демон стартовал на файле с именем команды и создавал redb-хранилище
+    // (4 таких файла с открытой мнемоникой попали в репозиторий).
     let args: Vec<String> = env::args().skip(1).collect();
-    if args
-        .first()
-        .map(|a| CLI_CMDS.contains(&a.as_str()))
-        .unwrap_or(false)
-    {
-        cli::run(args);
-        return;
+    let first = args.first().map(|s| s.as_str());
+    if let Some(cmd) = first {
+        if cli::COMMANDS.contains(&cmd) {
+            cli::run(args);
+            return;
+        }
+        // `serve` — явный запуск демона, остальные позиционные аргументы
+        // допускаются только как явный путь к хранилищу.
+        if cmd != "serve" && !cli::looks_like_store_path(cmd) {
+            eprint!("{}", cli::usage());
+            eprintln!("nexxusd: unknown command `{cmd}`");
+            process::exit(2);
+        }
     }
-    let path = match args.first().map(|s| s.as_str()) {
+    let path = match first {
         Some("serve") => args.get(1).cloned(),
-        _ => args.first().cloned(),
+        other => other.map(|s| s.to_string()),
     }
     .unwrap_or_else(|| cli::default_store().to_string_lossy().into_owned());
 
