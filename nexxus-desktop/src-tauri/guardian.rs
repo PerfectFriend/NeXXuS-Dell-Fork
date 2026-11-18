@@ -9,7 +9,7 @@
 
 use crate::telegram::get_bot;
 use serde_json::{json, Value};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::net::TcpStream;
@@ -45,7 +45,7 @@ pub fn nexxusd_log_path() -> String {
 /// с ним не происходит.
 /// Паттерн процесса ноды для pgrep/pkill: матчит любой путь к бинарнику
 /// nexxusd (`/usr/bin/nexxusd`, `…/release/nexxusd`), но не nexxus-desktop.
-const NEXXUSD_MATCH: &str = "(^|/)nexxusd( |$)";
+pub(crate) const NEXXUSD_MATCH: &str = "(^|/)nexxusd( |$)";
 
 /// Адрес локального WS API ноды — из конфига монитора (node.conf, поле `api`),
 /// по умолчанию 127.0.0.1:4010. Раньше здесь был зашитый порт 4010, из-за чего
@@ -267,16 +267,14 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
     Ok(())
 }
 
-/// Является ли процесс nexxusd запущенным.
+/// Является ли процесс nexxusd запущенным (продакшн-бэкенд: systemd/pgrep).
 pub fn is_nexxusd_running() -> bool {
-    let output = Command::new("pgrep")
-        .args(["-f", NEXXUSD_MATCH])
-        .stdout(Stdio::piped())
-        .output();
-    match output {
-        Ok(out) => !out.stdout.is_empty(),
-        Err(_) => false,
-    }
+    is_nexxusd_running_with(&crate::process_backend::SystemdBackend)
+}
+
+/// P0-C: проверка через произвольный бэкенд процесса.
+pub fn is_nexxusd_running_with(backend: &dyn crate::process_backend::ProcessBackend) -> bool {
+    backend.is_running()
 }
 
 /// Останавливает nexxusd (SIGTERM, затем добивание SIGKILL).
@@ -285,26 +283,14 @@ pub fn is_nexxusd_running() -> bool {
 /// иначе `Restart=on-failure` её воскресит, и кнопка «Остановить» снова
 /// будет выглядеть нерабочей.
 pub fn stop_nexxusd() -> Result<(), String> {
-    if crate::node_unit::is_installed() {
-        let _ = Command::new("systemctl")
-            .args(["--user", "stop", crate::node_unit::NODE_UNIT_NAME])
-            .status();
-        std::thread::sleep(Duration::from_millis(800));
-    }
+    stop_nexxusd_with(&crate::process_backend::SystemdBackend)
+}
 
-    let _ = Command::new("pkill")
-        .args(["-f", NEXXUSD_MATCH])
-        .status();
-    std::thread::sleep(Duration::from_millis(1500));
-    // Если пережил SIGTERM — SIGKILL
-    if is_nexxusd_running() {
-        let _ = Command::new("pkill")
-            .args(["-9", "-f", NEXXUSD_MATCH])
-            .status();
-        std::thread::sleep(Duration::from_millis(500));
-    }
-    if is_nexxusd_running() {
-        return Err("nexxusd не завершился после SIGKILL".into());
+/// P0-C: остановка через произвольный бэкенд (в тестах — только свой child).
+pub fn stop_nexxusd_with(backend: &dyn crate::process_backend::ProcessBackend) -> Result<(), String> {
+    backend.stop()?;
+    if backend.is_running() {
+        return Err("nexxusd не завершился".into());
     }
     Ok(())
 }
@@ -340,73 +326,28 @@ pub fn api_tcp_open(addr: &str) -> bool {
 }
 
 pub fn start_nexxusd() -> Result<(), String> {
-    if is_nexxusd_running() {
-        return Ok(());
-    }
-    // Процесс не нашёлся pgrep (запущен чужим путём), но API отвечает —
-    // не плодим второй экземпляр на той же БД (redb lock → паника в логе).
-    if api_tcp_open(&api_addr()) {
-        return Ok(());
-    }
+    start_nexxusd_with(&crate::process_backend::SystemdBackend)
+}
 
-    // Нода под управлением systemd — поднимаем её ТОЛЬКО через systemctl.
-    // Раньше при неактивном юните монитор порождал «детскую» копию nexxusd
-    // вне systemd: без авторестарта, без unit-контроля и с дрейфом путей.
-    if crate::node_unit::is_installed() {
-        if crate::node_unit::unit_state() == "active" {
-            return Ok(());
-        }
-        let out = Command::new("systemctl")
-            .args(["--user", "start", crate::node_unit::NODE_UNIT_NAME])
-            .output()
-            .map_err(|e| format!("systemctl start failed: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "systemctl start {}: {}",
-                crate::node_unit::NODE_UNIT_NAME,
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
+/// P0-C: запуск через произвольный бэкенд процесса (в тестах — SpawnBackend,
+/// реальный хост не трогается).
+pub fn start_nexxusd_with(backend: &dyn crate::process_backend::ProcessBackend) -> Result<(), String> {
+    if backend.is_running() {
+        return Ok(());
+    }
+    // Процесс не нашёлся, но API отвечает — не плодим второй экземпляр
+    // на той же БД (redb lock → паника в логе).
+    if api_tcp_open(&api_addr()) {
         return Ok(());
     }
 
     // Lock-файл БД НЕ удаляем: redb держит его через flock, после падения
     // процесса flock снимается ОС сама, а удаление файла под живым процессом
-    // (запущенным по другому пути, не попавшему под pgrep) давало бы второму
-    // экземпляру открыть ту же БД — риск двойной записи и порчи store.redb.
+    // давало бы второму экземпляру открыть ту же БД — риск порчи store.redb.
 
-    // Конфиг ноды (монитор — единственный источник настроек).
     let cfg = crate::node_config::load();
-    let env = crate::node_config::to_env(&cfg);
-
-    // Лог ноды: stderr перенаправляем в файл (иначе `nexxusd logs` не найдёт его).
     let log_path = std::path::PathBuf::from(nexxusd_log());
-    if let Some(parent) = log_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let log_out = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|e| format!("Не удалось открыть лог {}: {e}", log_path.display()))?;
-    let log_err = log_out
-        .try_clone()
-        .map_err(|e| format!("Не удалось клонировать лог: {e}"))?;
-
-    let mut cmd = Command::new(nexxusd_bin());
-    cmd.arg(nexxusd_store())
-        .env("NEXXUS_LOG", &log_path)
-        .stdout(Stdio::from(log_out))
-        .stderr(Stdio::from(log_err));
-    for (key, value) in env {
-        cmd.env(key, value);
-    }
-
-    let _child = cmd
-        .spawn()
-        .map_err(|e| format!("Не удалось запустить nexxusd: {e}"))?;
-
-    Ok(())
+    backend.start(&cfg, &nexxusd_bin(), &nexxusd_store(), &log_path)
 }
 
 /// Ожидает готовности API (пробует подключиться к WebSocket).
@@ -944,8 +885,12 @@ mod start_flow_tests {
         }
     }
 
-    /// Прогоняет реальный флоу кнопки «Start»: start_nexxusd → wait_for_api_ready →
-    /// node_status, с замерами каждого шага. Ловит зависание на Starting.
+    /// Прогоняет реальный флоу кнопки «Start» на НАСТОЯЩЕМ хосте:
+    /// start_nexxusd → wait_for_api_ready → node_status.
+    /// P0-C: помечен #[ignore] — тесту нужен реальный бинарь nexxusd и он
+    /// трогает системный юнит/процессы. Гоняется отдельным CI-шагом после
+    /// `cargo build -p nexxus-node`: `cargo test -- --ignored start_flow`.
+    #[ignore]
     #[tokio::test]
     async fn start_flow_completes_with_timings() {
         let _g = ENV_LOCK.lock().unwrap();
