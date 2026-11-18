@@ -11,13 +11,7 @@ use url::Url;
 
 /// Путь к файлу токена API ноды.
 pub fn api_token_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("NEXXUS_API_TOKEN_FILE") {
-        if !p.is_empty() {
-            return std::path::PathBuf::from(p);
-        }
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    std::path::PathBuf::from(home).join(".nexxus").join("api.token")
+    std::path::PathBuf::from(crate::paths::api_token_path())
 }
 
 /// Читает токен API ноды. `None`, если файла нет или он пуст.

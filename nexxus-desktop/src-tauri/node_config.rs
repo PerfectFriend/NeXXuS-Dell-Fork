@@ -158,20 +158,59 @@ pub fn default_log_path() -> PathBuf {
 /// Кворум имеет смысл только вместе с реестром аудиторов: при пустом
 /// реестре порог обязан быть нулевым, иначе нода не сможет закрыть эпоху.
 pub fn validate(cfg: &NodeConfig) -> Result<(), String> {
-    if cfg.listen.trim().is_empty() {
-        return Err("Адрес P2P-слушателя не может быть пустым".into());
+    // P0-B: ни одно строковое поле не должно содержать управляющих символов —
+    // иначе значение уйдёт в unit-файл/JSON и станет инъекцией.
+    for (name, val) in [
+        ("listen", &cfg.listen),
+        ("api", &cfg.api),
+        ("spec_version", &cfg.spec_version),
+        ("log_path", &cfg.log_path),
+    ] {
+        if val.chars().any(|c| c.is_control()) {
+            return Err(format!("Поле '{name}' содержит управляющий символ"));
+        }
     }
-    if !cfg.listen.contains(':') {
-        return Err(format!("Адрес P2P-слушателя '{}' должен содержать порт", cfg.listen));
+    for a in &cfg.auditors {
+        if a.chars().any(|c| c.is_control()) {
+            return Err("Реестр аудиторов содержит управляющий символ".into());
+        }
     }
-    if cfg.api.trim().is_empty() {
-        return Err("Адрес API не может быть пустым".into());
+    // Адреса — строго как SocketAddr, а не «есть двоеточие».
+    cfg.listen
+        .parse::<std::net::SocketAddr>()
+        .map_err(|e| format!("Некорректный адрес P2P-слушателя '{}': {e}", cfg.listen))?;
+    cfg.api
+        .parse::<std::net::SocketAddr>()
+        .map_err(|e| format!("Некорректный адрес API '{}': {e}", cfg.api))?;
+    // Аудиторы — hex ed25519-ключи, ровно 64 символа.
+    for a in &cfg.auditors {
+        if a.len() != 64 || !a.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!(
+                "Ключ аудитора должен быть 64 hex-символа ed25519, получено: '{a}'"
+            ));
+        }
     }
-    if !cfg.api.contains(':') {
-        return Err(format!("Адрес API '{}' должен содержать порт", cfg.api));
+    // log_path — абсолютный путь.
+    if !std::path::Path::new(&cfg.log_path).is_absolute() {
+        return Err(format!(
+            "Путь лога '{}' должен быть абсолютным",
+            cfg.log_path
+        ));
     }
-    if cfg.epoch_secs == 0 {
-        return Err("Длительность эпохи должна быть больше нуля".into());
+    // spec_version — безопасный идентификатор версии.
+    if cfg.spec_version.is_empty()
+        || !cfg
+            .spec_version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(format!(
+            "Недопустимая версия спецификации: '{}'",
+            cfg.spec_version
+        ));
+    }
+    if cfg.epoch_secs == 0 || cfg.epoch_secs > 86_400 {
+        return Err("Длительность эпохи должна быть в диапазоне 1..=86400 секунд".into());
     }
     if cfg.auditors.is_empty() {
         if cfg.threshold != 0 {
@@ -302,6 +341,44 @@ pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 mod tests {
     use super::*;
 
+    /// P0-B: сохранение конфига с управляющим символом в любом поле — Err.
+    #[test]
+    fn validate_rejects_control_chars_in_any_field() {
+        let base = NodeConfig::default();
+        let cases: Vec<NodeConfig> = vec![
+            NodeConfig { listen: "127.0.0.1:4001\nX".into(), ..base.clone() },
+            NodeConfig { api: "127.0.0.1:4010\nX".into(), ..base.clone() },
+            NodeConfig { log_path: "/tmp/a\nX".into(), ..base.clone() },
+            NodeConfig { spec_version: "1.0\nX".into(), ..base.clone() },
+            NodeConfig { auditors: vec!["ab\ncd".into()], threshold: 1, ..base.clone() },
+        ];
+        for (i, cfg) in cases.iter().enumerate() {
+            assert!(validate(cfg).is_err(), "случай {i} не отклонён: {cfg:?}");
+        }
+    }
+
+    /// P0-B: адреса валидируются как SocketAddr; аудиторы — 64 hex.
+    #[test]
+    fn validate_strict_addresses_auditors_paths() {
+        let base = NodeConfig::default();
+        // «есть двоеточие» — недостаточно
+        assert!(validate(&NodeConfig { listen: "127.0.0.1:abc".into(), ..base.clone() }).is_err());
+        assert!(validate(&NodeConfig { api: "localhost".into(), ..base.clone() }).is_err());
+        // короткий/негекс ключ аудитора отклоняется
+        assert!(validate(&NodeConfig { auditors: vec!["aa".into()], threshold: 1, ..base.clone() }).is_err());
+        assert!(validate(&NodeConfig { auditors: vec!["zz".repeat(32)], threshold: 1, ..base.clone() }).is_err());
+        // относительный log_path отклоняется
+        assert!(validate(&NodeConfig { log_path: "rel.log".into(), ..base.clone() }).is_err());
+        // валидный конфиг проходит
+        let ok = NodeConfig {
+            auditors: vec!["ab".repeat(32)],
+            threshold: 1,
+            ..base.clone()
+        };
+        assert!(validate(&ok).is_ok(), "валидный конфиг отклонён: {:?}", validate(&ok));
+    }
+
+
     /// Изолированный каталог конфигурации на время теста.
     ///
     /// Путь передаётся явно в `load_from`/`save_to`, а не через env: тесты
@@ -350,7 +427,7 @@ mod tests {
         let cfg = NodeConfig {
             listen: "0.0.0.0:4001".into(),
             api: "127.0.0.1:5010".into(),
-            auditors: vec!["aa".into(), "bb".into()],
+            auditors: vec!["aa".repeat(32), "bb".repeat(32)],
             threshold: 1,
             epoch_secs: 600,
             tor: false,
@@ -410,11 +487,18 @@ mod tests {
         assert!(save_to(&bad4, &path).is_err());
         // Корректная конфигурация сохраняется.
         let good = NodeConfig {
-            auditors: vec!["aa".into(), "bb".into(), "cc".into()],
+            auditors: vec!["aa".repeat(32), "bb".repeat(32), "cc".repeat(32)],
             threshold: 2,
             ..NodeConfig::default()
         };
         assert!(save_to(&good, &path).is_ok());
+        // Короткий ключ аудитора (не 64 hex) — тоже ошибка.
+        let bad5 = NodeConfig {
+            auditors: vec!["aa".into()],
+            threshold: 1,
+            ..NodeConfig::default()
+        };
+        assert!(save_to(&bad5, &path).is_err());
     }
 
     #[test]

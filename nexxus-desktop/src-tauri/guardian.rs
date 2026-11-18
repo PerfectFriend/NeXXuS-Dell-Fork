@@ -19,41 +19,17 @@ use tokio::time::sleep;
 /// Путь к бинарнику nexxusd: env NEXXUSD_BIN → рядом с текущим exe →
 /// /usr/local/bin и /usr/bin → PATH. Хардкод под build-хост убран.
 fn nexxusd_bin() -> String {
-    if let Ok(p) = std::env::var("NEXXUSD_BIN") {
-        if !p.is_empty() && std::path::Path::new(&p).exists() {
-            return p;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let cand = dir.join("nexxusd");
-            if cand.exists() {
-                return cand.to_string_lossy().into_owned();
-            }
-        }
-    }
-    for p in ["/usr/local/bin/nexxusd", "/usr/bin/nexxusd"] {
-        if std::path::Path::new(p).exists() {
-            return p.to_string();
-        }
-    }
-    "nexxusd".to_string() // надежда на PATH
+    crate::paths::nexxusd_bin()
 }
 
 /// Путь к store.redb (переопределяется через NEXXUS_STORE).
 fn nexxusd_store() -> String {
-    std::env::var("NEXXUS_STORE").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        format!("{home}/.nexxus/store.redb")
-    })
+    crate::paths::nexxusd_store()
 }
 
 /// Путь к логу ноды (переопределяется через NEXXUS_LOG_FILE).
 fn nexxusd_log() -> String {
-    std::env::var("NEXXUS_LOG_FILE").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        format!("{home}/.nexxus/nexxusd.log")
-    })
+    crate::paths::nexxusd_log()
 }
 
 /// Путь к лог-файлу ноды (используется командой `node_log_tail_cmd`).
@@ -958,7 +934,8 @@ mod start_flow_tests {
 
     fn real_nexxusd() -> String {
         let dir = std::env::var("CARGO_TARGET_DIR_NEXXUS")
-            .unwrap_or_else(|_| "/home/thomas/build/cache/cargo-target-nexxus".into());
+            .or_else(|_| std::env::var("CARGO_TARGET_DIR"))
+            .unwrap_or_else(|_| "target".into());
         let cand = format!("{dir}/debug/nexxusd");
         if std::path::Path::new(&cand).exists() {
             cand

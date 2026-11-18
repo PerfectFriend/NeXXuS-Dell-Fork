@@ -28,6 +28,7 @@ mod guardian;
 mod instance;
 mod node_config;
 mod node_unit;
+mod paths;
 mod onboarding;
 mod telegram;
 
