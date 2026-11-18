@@ -17,8 +17,8 @@ git -c user.name=auditor -c user.email=auditor@local commit -m "RC1 squash"
 # либо взять готовый tar.gz у владельца (NeXXus-Node-audit-squash.tar.gz)
 ```
 
-Проверено 2026-11-18: squash = 1 коммит, строгий скан секретов → 0 хитов,
-redb-файлов → 0.
+Проверено 2026-11-18 на HEAD 73b36fc: squash = 1 коммит, скан секретов (ghp_/sk-/PRIVATE KEY/bot-token/xox) → 0 хитов,
+redb по magic → 0 файлов, файлы >1 МБ вне assets/public → 0. Готовый артефакт: `NeXXus-Node-audit-squash.tar.gz` (у владельца).
 
 ## 1. Что это
 
@@ -32,21 +32,20 @@ NeXXus Node — P2P-узел децентрализованного хранил
 
 ```bash
 git clone <repo> && cd NeXXus-Node
-cargo test --workspace                 # 206 passed / 0 failed / 1 ignored (проверено 2026-11-15, HEAD 204cf51)
-cargo clippy --workspace --all-targets -- -D warnings   # 0 warnings
+cargo test --workspace                 # 221 passed / 0 failed / 1 ignored (фактически, 2026-11-18, HEAD 73b36fc)
+cargo clippy --workspace --all-targets -- -D warnings   # Finished, 0 warnings (2026-11-18, HEAD 73b36fc)
 cargo build --release -p nexxus-node   # собирает nexxusd
 NEXXUS_DATA_DIR=$(mktemp -d) NEXXUS_LISTEN=127.0.0.1:14001 NEXXUS_API_ADDR=127.0.0.1:14010 NEXXUS_TOR=0 \
   ./target/release/nexxusd &            # поднять демон
-python3 scripts/e2e_smoke.py            # 58/58 живых WS-проверок (auth, chunks, backup, SMP, names, bootstrap, econ-подпись, onion-only политики)
+python3 scripts/e2e_smoke.py            # E2E SMOKE: 58/58 проверок прошли (фактически, 2026-11-18, HEAD 73b36fc, release-binary)
 ```
 
-Desktop: `cd nexxus-desktop/src-tauri && cargo test --bins` (22/22, включая реальный spawn/stop ноды) + `cargo clippy --all-targets -- -D warnings` (0).
+Desktop: `cd nexxus-desktop && cargo test --bins` (36 passed / 0 failed / 1 ignored, 2026-11-18, HEAD 73b36fc) + `cargo clippy --bins --all-targets -- -D warnings` (0).
 
-> Внимание аудитора: desktop-тест `guardian::start_flow_completes_with_timings` вызывает
-> `stop_nexxusd()`/`start_nexxusd()`, а они управляют **пользовательским systemd-юнитом**
-> `nexxus-node.service`. На машине с живой нодой прогон desktop-тестов глушит её.
-> Это известный дефект изоляции тестов — см. задание P0-C в письме аудиторам
-> `docs/audits/2026-11-15-auditor-briefing.md`.
+> Примечание (P0-C исправлен): интеграционный тест `start_flow_completes_with_timings`
+> помечен `#[ignore]` и по умолчанию не выполняется — прогон desktop-тестов **не трогает**
+> живую ноду/systemd. Запускается отдельно: `cargo test -- --ignored` после
+> `cargo build -p nexxus-node` (в CI — отдельным шагом с `CARGO_TARGET_DIR_NEXXUS`).
 
 ## 3. Единый конфиг (важно для понимания портов)
 
