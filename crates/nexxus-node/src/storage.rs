@@ -657,7 +657,8 @@ impl ChunkStore {
         Ok(out)
     }
 
-    fn delete_meta(&self, key: &str) -> Result<(), NexxusError> {
+    /// FREEZE-BREAK (S4/ADR-0010): pub, чтобы identity_store мог затирать plaintext-мнемонику из meta.
+    pub fn delete_meta(&self, key: &str) -> Result<(), NexxusError> {
         let wtx = self
             .db
             .begin_write()

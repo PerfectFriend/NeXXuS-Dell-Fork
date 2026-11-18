@@ -36,6 +36,19 @@ pub fn backup_seed(
     pin: &str,
     duress_pin: Option<&str>,
 ) -> Result<PathBuf, NexxusError> {
+    let phrase = read_mnemonic(store, Some(pin))?.ok_or_else(|| NexxusError::Io("identity not initialized".into()))?;
+    write_vault_from_phrase(store, phrase.as_bytes(), pin, duress_pin)
+}
+
+/// S4/ADR-0010: записывает vault напрямую из фразы (без чтения meta) —
+/// для fresh identity и миграции. Атомарно (tmp+rename), mode 0600,
+/// после записи проверяет roundtrip через check_pin.
+pub fn write_vault_from_phrase(
+    store: &ChunkStore,
+    phrase: &[u8],
+    pin: &str,
+    duress_pin: Option<&str>,
+) -> Result<PathBuf, NexxusError> {
     if pin.len() < 4 {
         return Err(NexxusError::Vault("PIN must be at least 4 chars".into()));
     }
@@ -44,8 +57,12 @@ pub fn backup_seed(
             return Err(NexxusError::Vault("duress PIN must differ from the primary PIN".into()));
         }
     }
-    let phrase = read_mnemonic(store)?.ok_or_else(|| NexxusError::Io("identity not initialized".into()))?;
-    let vault_json = encrypt_vault_payload(phrase.as_bytes(), pin, duress_pin)?;
+    let vault_json = encrypt_vault_payload(phrase, pin, duress_pin)?;
+    // roundtrip-проверка: vault обязан открываться этим PIN до записи на диск.
+    match check_pin(&vault_json, pin)? {
+        PinCheck::Ok => {}
+        _ => return Err(NexxusError::Vault("vault roundtrip check failed".into())),
+    }
     let path = seed_vault_path(store);
     let tmp = path.with_extension("vault.tmp");
     std::fs::write(&tmp, vault_json.as_bytes())
@@ -58,6 +75,21 @@ pub fn backup_seed(
     }
     std::fs::rename(&tmp, &path).map_err(|e| NexxusError::Io(format!("rename vault: {e}")))?;
     Ok(path)
+}
+
+/// S4/ADR-0010: читает seed из зашифрованного vault по PIN (память — Zeroizing).
+/// Duress-PIN → отказ (seed не выдаём никогда). Неверный PIN → Err.
+pub fn load_seed_from_vault(store: &ChunkStore, pin: &str) -> Result<zeroize::Zeroizing<String>, NexxusError> {
+    let path = seed_vault_path(store);
+    let json = std::fs::read_to_string(&path)
+        .map_err(|e| NexxusError::Io(format!("read seed vault {}: {e}", path.display())))?;
+    let res = decrypt_vault_payload(&json, pin)?;
+    if res.is_duress {
+        return Err(NexxusError::Vault("duress PIN — seed не выдаётся".into()));
+    }
+    String::from_utf8(res.decrypted_bytes)
+        .map(zeroize::Zeroizing::new)
+        .map_err(|_| NexxusError::Io("vault payload is not valid utf-8".into()))
 }
 
 /// Metadata about the seed vault — no decryption, no secrets.
@@ -168,7 +200,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("store.redb");
         let store = ChunkStore::open(&path).unwrap();
-        let _ = load_or_create_identity(&store).unwrap();
+        let _ = load_or_create_identity(&store, None).unwrap();
         (dir, store)
     }
 
@@ -189,7 +221,7 @@ mod tests {
         assert!(st.created_at > 0);
         // Содержимое файла — JSON, без сид-фразы в открытом виде.
         let raw = std::fs::read_to_string(&path).unwrap();
-        let phrase = read_mnemonic(&store).unwrap().unwrap();
+        let phrase = read_mnemonic(&store, None).unwrap().unwrap();
         assert!(!raw.contains(phrase.as_str()));
     }
 
@@ -199,7 +231,7 @@ mod tests {
         backup_seed(&store, "1234", None).unwrap();
         match restore_seed(&store, "1234").unwrap() {
             RestoreOutcome::Already(id) => {
-                let (id2, _) = load_or_create_identity(&store).unwrap();
+                let (id2, _) = load_or_create_identity(&store, None).unwrap();
                 assert_eq!(id, id2.node_id);
             }
             other => panic!("expected Already, got {other:?}"),
@@ -209,7 +241,7 @@ mod tests {
     #[test]
     fn restore_into_empty_store_imports_and_restores_node_id() {
         let (d1, store1) = store_with_identity();
-        let (id1, _) = load_or_create_identity(&store1).unwrap();
+        let (id1, _) = load_or_create_identity(&store1, None).unwrap();
         backup_seed(&store1, "1234", None).unwrap();
         // Копируем vault рядом с новым (пустым) стором.
         let d2 = tempdir().unwrap();
@@ -223,7 +255,7 @@ mod tests {
             other => panic!("expected Imported, got {other:?}"),
         }
         // И load_or_create на новом сторе видит ту же идентичность.
-        let (id2, created) = load_or_create_identity(&store2).unwrap();
+        let (id2, created) = load_or_create_identity(&store2, None).unwrap();
         assert!(created.is_none());
         assert_eq!(id2.node_id, id1.node_id);
     }
@@ -250,7 +282,7 @@ mod tests {
         // успешного restore перешифровывается на 600k автоматически.
         use nexxus_core::keys::vault::{encrypt_vault_payload_rounds, PBKDF2_ROUNDS, PBKDF2_ROUNDS_SDK_DEFAULT};
         let (_d, store) = store_with_identity();
-        let phrase = read_mnemonic(&store).unwrap().unwrap();
+        let phrase = read_mnemonic(&store, None).unwrap().unwrap();
         let legacy = encrypt_vault_payload_rounds(
             phrase.as_bytes(),
             "1234",

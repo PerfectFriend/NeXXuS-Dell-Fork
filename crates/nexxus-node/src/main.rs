@@ -51,6 +51,27 @@ pub fn disable_core_dumps() {
 #[cfg(not(unix))]
 pub fn disable_core_dumps() {}
 
+/// S4: PIN для seed vault: `NEXXUS_SEED_PIN` env → systemd-credential `seed.pin`
+/// (`$CREDENTIALS_DIRECTORY`). Возвращает None, если нигде не задан.
+pub fn vault_pin_from_env_or_credential() -> Option<zeroize::Zeroizing<String>> {
+    if let Ok(p) = std::env::var("NEXXUS_SEED_PIN") {
+        if !p.is_empty() {
+            return Some(zeroize::Zeroizing::new(p));
+        }
+    }
+    if let Ok(dir) = std::env::var("CREDENTIALS_DIRECTORY") {
+        let p = std::path::Path::new(&dir).join("seed.pin");
+        if let Ok(s) = std::fs::read_to_string(&p) {
+            let t = s.trim();
+            if !t.is_empty() {
+                return Some(zeroize::Zeroizing::new(t.to_string()));
+            }
+        }
+    }
+    None
+}
+
+
 fn main() {
     disable_core_dumps();
     // Логи arti/Tor по RUST_LOG (по умолчанию — только предупреждения nexxusd).
@@ -170,7 +191,9 @@ fn main() {
         // ключ деривируется по SLIP-0010, X25519 — из seed с domain separator.
         // NodeId = SHA-256(pubkey) и поэтому стабилен между перезапусками.
         // Mnemonic печатается ровно один раз — при первом создании.
-        let (node_iden, fresh_mnemonic) = load_or_create_identity(&store).unwrap_or_else(|e| {
+        // S4/ADR-0010: PIN для seed vault — из env или systemd-credential.
+        let seed_pin = vault_pin_from_env_or_credential();
+        let (node_iden, fresh_mnemonic) = load_or_create_identity(&store, seed_pin.as_ref().map(|z| z.as_str())).unwrap_or_else(|e| {
             eprintln!("nexxusd: identity load failed: {e}");
             process::exit(1);
         });

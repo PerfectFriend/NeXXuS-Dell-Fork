@@ -519,7 +519,9 @@ impl LocalApi {
                 "param 'confirm' must be true to export the mnemonic".into(),
             ));
         }
-        match read_mnemonic(&self.store)? {
+        // S4: после миграции мнемоника живёт только в vault — для export нужен PIN из запроса.
+        let pin = params.as_ref().and_then(|p| p.get("pin")).and_then(|p| p.as_str());
+        match read_mnemonic(&self.store, pin)? {
             Some(phrase) => Ok(serde_json::json!({
                 "mnemonic": phrase.as_str(),
                 "word_count": phrase.split_whitespace().count(),
