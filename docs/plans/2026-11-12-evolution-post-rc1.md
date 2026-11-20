@@ -55,7 +55,7 @@
 | Reputation / soft-score пиров | ✅ DONE: score (success/fail + EWMA RTT), eviction lowest-score при full table ниже порога 40, метрика peers_evicted, THREAT_MODEL обновлён | + half-life decay 24ч (2026-11-20, `PeerScore::decay`), eviction мёртвых по score `fail≥5 && fail≥2·success` — не рвёт живые соединения |
 | Метрики Prometheus / JSON | ✅ DONE: `/metrics` plain-HTTP, token-gated; JSON + prom text в `node_metrics` | localhost по умолчанию |
 | Structured logging | ✅ DONE: JSON-lines через log_ev!; **2026-11-20**: redaction зарегистрированных секретов (`register_secret`, API-токен при старте), дедлок рекурсии исправлен, регрессионный тест | без секретов в логах — закреплено тестом |
-| Connection quality hints | ✅ DONE: node_ping_peer + EWMA rtt_ms в PeerScore, UI-кнопка Ping | loss — нет (retransmit counter, отдельно) |
+| Connection quality hints | ✅ DONE: node_ping_peer + EWMA rtt_ms в PeerScore, UI-кнопка Ping | ✅ 2026-11-20: loss-индикатор `req_timeouts` + `recv_req_frame` (таймаут 10с) для ping/fetch/por |
 | Routing: replacement cache | ✅ DONE 2026-11-20 (M-16/H-3): полный k-bucket → replacement cache (cap 64), `evict_dead`/`evict_addr` дозаполняют бакет; тест `full_bucket_goes_to_replacement_and_evict_backfills` | раньше пир молча отбрасывался |
 | M-18: паника на не-ASCII в логе | ✅ DONE 2026-11-20: срез по `chars().take(16)` вместо байтов | |
 | Опциональный STUN / hole-punching | Lab без Tor | Не ломать onion-профиль — отложено, не RC-блокер |
