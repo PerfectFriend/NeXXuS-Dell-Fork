@@ -58,5 +58,10 @@ tempfile = "3"
 [target.'cfg(unix)'.dependencies]
 rlimit = "0.10"
 
+# Windows-cross (mingw): arti→rusqlite линкует системный sqlite3, которого нет
+# на раннере; bundled собирает amalgamation из исходников.
+[target.'cfg(target_os = "windows")'.dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+
 [lints]
 workspace = true
