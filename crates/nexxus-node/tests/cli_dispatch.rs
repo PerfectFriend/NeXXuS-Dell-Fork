@@ -20,7 +20,8 @@ use std::process::Command;
 fn expected_output(cmd: &str) -> Option<&'static str> {
     match cmd {
         "--version" => Some("nexxusd "),
-        "doctor" => Some("chunk_count"),
+        // C-5/чек-лист: doctor на отсутствующем сторе НЕ создаёт файл и выходит
+        // с ошибкой — ожидаемый вывод теперь проверяет отдельный тест ниже.
         "backup" => Some("chunk_count"),
         _ => None,
     }
@@ -133,6 +134,23 @@ fn commands_do_not_create_store_file_in_cwd() {
             );
         }
     }
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Чек-лист аудита (п.3): `nexxusd doctor` на отсутствующем сторе не создаёт
+/// файл и завершается с ошибкой, а не печатает отчёт из пустого стора.
+#[test]
+fn doctor_missing_store_creates_nothing_and_fails() {
+    let home = temp_home("doctor-missing");
+    let sub = home.join("empty");
+    std::fs::create_dir_all(&sub).expect("subdir");
+    let (code, text, files) = run_in_empty_dir(env!("CARGO_BIN_EXE_nexxusd"), &["doctor"], &sub);
+    assert!(files.is_empty(), "doctor создал файлы: {files:?}");
+    assert_eq!(code, Some(1), "doctor на отсутствующем сторе должен exit(1): {text}");
+    assert!(
+        text.contains("не создан") || text.contains("does not exist"),
+        "ожидалось сообщение об отсутствии файла: {text}"
+    );
     let _ = std::fs::remove_dir_all(&home);
 }
 

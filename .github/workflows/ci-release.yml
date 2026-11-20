@@ -241,6 +241,11 @@ jobs:
         with:
           targets: x86_64-pc-windows-gnu
 
+      # H-11: repo pins rust-toolchain.toml to 1.99.1, который перекрывает
+      # toolchain от action — target надо ставить именно на 1.99.1.
+      - name: Add windows-gnu target to pinned toolchain
+        run: rustup target add x86_64-pc-windows-gnu --toolchain 1.99.1
+
       - name: Install mingw-w64
         run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
 
