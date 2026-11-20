@@ -302,6 +302,9 @@ fn main() {
         let token_path = api_auth::token_file_path();
         match api_auth::load_or_create_token(&token_path) {
             Ok(token) => {
+                // C-5/E1: токен регистрируется как секрет — log_ev! вырежет
+                // его из любого поля, куда он случайно попадёт.
+                crate::logging::register_secret(&token);
                 api.set_api_token(token);
                 println!("nexxusd: API token загружен/создан, файл {}", token_path.display());
             }

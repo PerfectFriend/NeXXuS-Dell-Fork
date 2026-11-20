@@ -206,6 +206,24 @@ impl PeerScore {
             self.success.checked_mul(100).map(|n| n / total).unwrap_or(100)
         }
     }
+
+    /// E1: half-life decay — каждые 24ч счётчики success/fail уменьшаются
+    /// вдвое, чтобы старое поведение не блокировало пир навсегда.
+    pub fn decay(&mut self, now_unix: u64) {
+        const HALF_LIFE_SECS: u64 = 24 * 3600;
+        if self.last_seen_unix == 0 || now_unix <= self.last_seen_unix {
+            return;
+        }
+        let elapsed = now_unix - self.last_seen_unix;
+        let halvings = elapsed / HALF_LIFE_SECS;
+        if halvings == 0 {
+            return;
+        }
+        let shift = u32::try_from(halvings).unwrap_or(63).min(63);
+        self.success >>= shift;
+        self.fail >>= shift;
+        self.last_seen_unix = now_unix;
+    }
 }
 
 /// NET-01 limits: global concurrent connections, per-IP active, per-IP new/min,
@@ -381,16 +399,21 @@ impl P2pNetwork {
     /// E1: record a served-request outcome for a peer (score input).
     pub fn note_peer_result(&self, addr: SocketAddr, ok: bool) {
         let mut scores = self.peer_scores.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // E1: применяем half-life decay ко всем записям при каждом апдейте
+        for e in scores.values_mut() {
+            e.decay(now);
+        }
         let e = scores.entry(addr).or_default();
         if ok {
             e.success = e.success.saturating_add(1);
         } else {
             e.fail = e.fail.saturating_add(1);
         }
-        e.last_seen_unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        e.last_seen_unix = now;
         // M-16/H-3: пир с плохим score (много фейлов подряд) вытесняется из
         // routing table, освобождая место живым из replacement cache.
         let dead = !ok && e.fail >= 5 && e.fail >= 2 * e.success;
@@ -1995,5 +2018,20 @@ mod tests {
         .expect("server did not enforce handshake timeout");
         assert!(res.is_err(), "expected connection closed after handshake timeout");
         server.abort();
+    }
+
+    #[test]
+    fn peer_score_half_life_decay() {
+        // E1: за 48ч (2 half-life по 24ч) счётчики уменьшаются в 4 раза
+        let mut s = PeerScore { success: 64, fail: 32, last_seen_unix: 1_000_000, rtt_ms: None };
+        s.decay(1_000_000 + 48 * 3600);
+        assert_eq!(s.success, 16);
+        assert_eq!(s.fail, 8);
+        assert_eq!(s.score(), 16 * 100 / 24);
+        // без прошествия half-life — без изменений
+        let mut s2 = PeerScore { success: 64, fail: 32, last_seen_unix: 1_000_000, rtt_ms: None };
+        s2.decay(1_000_000 + 3600);
+        assert_eq!(s2.success, 64);
+        assert_eq!(s2.fail, 32);
     }
 }
