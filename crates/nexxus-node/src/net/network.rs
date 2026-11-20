@@ -143,6 +143,8 @@ pub struct Metrics {
     pub backup_ok: AtomicU64,
     pub backup_fail: AtomicU64,
     pub peers_evicted: AtomicU64,
+    /// E1 loss-индикатор: клиентские запросы (ping/fetch/por), истёкшие по таймауту.
+    pub req_timeouts: AtomicU64,
 }
 
 impl Metrics {
@@ -166,6 +168,7 @@ impl Metrics {
             "backup_ok": self.backup_ok.load(Ordering::Relaxed),
             "backup_fail": self.backup_fail.load(Ordering::Relaxed),
             "peers_evicted": self.peers_evicted.load(Ordering::Relaxed),
+            "req_timeouts": self.req_timeouts.load(Ordering::Relaxed),
         })
     }
 
@@ -538,6 +541,24 @@ impl P2pNetwork {
         Ok((opcode, req_id, payload))
     }
 
+    /// E1: приём ответа на клиентский запрос с таймаутом; истечение — в метрику
+    /// `req_timeouts` (loss-индикатор) и ошибка, а не бесконечное ожидание.
+    pub async fn recv_req_frame<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send>(
+        &self,
+        stream: &mut S,
+        hs: &Handshake,
+    ) -> Result<(Opcode, u32, Vec<u8>), NexxusError> {
+        const REQ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+        match tokio::time::timeout(REQ_TIMEOUT, self.recv_verified_frame(stream, hs)).await {
+            Ok(r) => r,
+            Err(_) => {
+                self.metrics.req_timeouts.fetch_add(1, Ordering::Relaxed);
+                crate::log_ev!("warn", "req.timeout");
+                Err(NexxusError::Io("request timeout".into()))
+            }
+        }
+    }
+
     /// True если адрес — Tor onion v3 (`<56ch>.onion[:port]`).
     pub fn is_onion_addr(addr: &str) -> bool {
         addr.split(':').next().unwrap_or("").ends_with(".onion")
@@ -722,7 +743,7 @@ impl P2pNetwork {
         let fetch = FetchChunk { hash: hash.0 };
         self.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::FetchChunk, 0x0004, &fetch)
             .await?;
-        let (op, _rid, payload) = self.recv_verified_frame(&mut stream, &hs).await?;
+        let (op, _rid, payload) = self.recv_req_frame(&mut stream, &hs).await?;
         if op == Opcode::ErrorResponse {
             let err = ErrorResponse::decode(&payload)?;
             return Err(NexxusError::Io(format!(
@@ -1200,7 +1221,7 @@ impl P2pNetwork {
         let hs = self.announce_handshake(&mut stream, 0x0001).await?;
         self.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::Ping, 0x0002, &nexxus_core::wire::payloads::Ping)
             .await?;
-        let (op, _rid, _payload) = self.recv_verified_frame(&mut stream, &hs).await?;
+        let (op, _rid, _payload) = self.recv_req_frame(&mut stream, &hs).await?;
         if op != Opcode::Pong {
             return Err(NexxusError::Io(format!(
                 "expected Pong, got opcode 0x{:02x}",
@@ -1227,7 +1248,7 @@ impl P2pNetwork {
         let challenge = PorChallenge { seed, count: 1, deadline_ms: 5000 };
         self.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::PorChallenge, 0x0012, &challenge)
             .await?;
-        let (op, _rid, payload) = self.recv_verified_frame(&mut stream, &hs).await?;
+        let (op, _rid, payload) = self.recv_req_frame(&mut stream, &hs).await?;
         let (ok, detail) = match op {
             Opcode::PorResponse => {
                 let resp = PorResponse::decode(&payload)

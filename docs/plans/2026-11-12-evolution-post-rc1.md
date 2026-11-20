@@ -71,7 +71,7 @@
 |---------|----------|
 | **Реальные квоты диска** | Не только «64 MiB foreign» / abstract sections — проверка free space + user-defined cap |
 - **Политики ретенции** | TTL чанков (`node_chunk_ttl`), pin/unpin (`node_chunk_pin`/`node_chunk_unpin`), GC просроченных (`node_gc`), lazy-expiry в `get_chunk`; pin защищает и от TTL, и от GC |
-| **Доказательства хранения (PoR) в расписании** | ✅ DONE 2026-11-20: self-audit цикл в `main.rs` (`NEXXUS_POR_AUDIT_SECS`, дефолт 6ч, 0=off): sample до 64 чанков, SHA-256(data)==hash, метрики por_ok/por_fail + `log_ev!("por.audit")`; помимо этого есть wire PoR challenge/response | периодический audit_holder со стороны пиров — следующая итерация |
+| **Доказательства хранения (PoR) в расписании** | ✅ DONE 2026-11-20: self-audit цикл в `main.rs` (`NEXXUS_POR_AUDIT_SECS`, дефолт 6ч, 0=off): sample до 64 чанков, SHA-256(data)==hash, метрики por_ok/por_fail + `log_ev!("por.audit")`; клиентский аудит пиров `audit_peer_por` + RPC `node_audit_peer`, scheduled-цикл аудирует до 8 пиров (`por.peers_audit`); wire PoR challenge/response — тест `audit_peer_por_ok_over_wire` | penalty в UI — следующая итерация |
 | **Импорт/экспорт архивов** | Зашифрованный bundle (chunk set + manifest) для cold backup вне redb |
 | **Версионирование файлов (optional)** | Не git; простой history указателей в журнале владельца |
 | **drive/ как FUSE или sync-folder** | Только если threat model ясен: plaintext folder = plaintext |
