@@ -454,8 +454,8 @@ impl LocalApi {
             "node_policy_list" => self.handle_node_policy_list(),
             "node_policy_delete" => self.handle_node_policy_delete(req.params),
             "node_policy_apply" => self.handle_node_policy_apply(req.params),
-            "node_gc" => self.handle_node_gc(req.params),            "node_export_bundle" => self.handle_node_export_bundle(req.params),
-            "node_import_bundle" => self.handle_node_import_bundle(req.params),
+            "node_gc" => self.handle_node_gc(req.params),            "node_export_bundle" => self.handle_node_export_bundle(req.params).await,
+            "node_import_bundle" => self.handle_node_import_bundle(req.params).await,
             "node_smp" => self.handle_node_smp().await,
             "node_smp_send" => self.handle_node_smp_send(req.params).await,
             "node_epoch" => self.handle_node_epoch().await,
@@ -1267,7 +1267,7 @@ impl LocalApi {
 
     /// E2: экспорт cold-backup bundle (зашифрован PIN'ом) в `<data>/bundles/`.
     /// params: pin (обязателен, затирается), опционально name.
-    fn handle_node_export_bundle(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+    async fn handle_node_export_bundle(&self, params: Option<Value>) -> Result<Value, NexxusError> {
         let pin = params
             .as_ref()
             .and_then(|p| p.get("pin"))
@@ -1276,7 +1276,14 @@ impl LocalApi {
             .ok_or_else(|| NexxusError::Vault("param 'pin' required".into()))?
             .to_string();
         let node_id = hex::encode(self.network.node_id().0);
-        let (vault, total, nmeta) = crate::bundle::export_bundle(&self.store, &node_id, &pin)?;
+        // PBKDF2 600k — тяжёлый KDF; в spawn_blocking, чтобы не блокировать
+        // tokio-воркер и не ронять WS-ответы (e2e smoke ловил таймаут).
+        let store = Arc::clone(&self.store);
+        let (vault, total, nmeta) = tokio::task::spawn_blocking(move || {
+            crate::bundle::export_bundle(&store, &node_id, &pin)
+        })
+        .await
+        .map_err(|e| NexxusError::Io(format!("bundle task join: {e}")))??;
         let dir = self
             .store
             .path()
@@ -1314,7 +1321,7 @@ impl LocalApi {
 
     /// E2: импорт bundle из файла. params: path, pin, confirm=true (симметрия
     /// с restore/delete — импорт пишет в живой стор).
-    fn handle_node_import_bundle(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+    async fn handle_node_import_bundle(&self, params: Option<Value>) -> Result<Value, NexxusError> {
         let path = params
             .as_ref()
             .and_then(|p| p.get("path"))
@@ -1352,7 +1359,11 @@ impl LocalApi {
         }
         let vault = std::fs::read_to_string(&canon)
             .map_err(|e| NexxusError::Io(format!("bundle read: {e}")))?;
-        crate::bundle::import_bundle(&self.store, &vault, pin)
+        let store = Arc::clone(&self.store);
+        let pin = pin.to_string();
+        tokio::task::spawn_blocking(move || crate::bundle::import_bundle(&store, &vault, &pin))
+            .await
+            .map_err(|e| NexxusError::Io(format!("bundle task join: {e}")))?
     }
 
     async fn handle_node_chunks(&self) -> Result<Value, NexxusError> {
