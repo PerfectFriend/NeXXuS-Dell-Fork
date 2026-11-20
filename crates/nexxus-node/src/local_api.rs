@@ -468,6 +468,7 @@ impl LocalApi {
             "node_upload" => self.handle_node_upload(req.params).await,
             "node_download" => self.handle_node_download(req.params).await,
             "node_por" => self.handle_node_por().await,
+            "node_audit_peer" => self.handle_node_audit_peer(req.params).await,
             "node_test_interhost" => self.handle_node_test_interhost(req.params).await,
             "panic_status" => self.handle_panic_status(),
             "panic_arm" => self.handle_panic_arm(req.params),
@@ -1616,6 +1617,17 @@ impl LocalApi {
 
     async fn handle_node_por(&self) -> Result<Value, NexxusError> {
         crate::vault::run_por(self.network.store())
+    }
+
+    /// E2: одноразовый аудит пира PoR-challenge по addr (см. P2pNetwork::audit_peer_por).
+    async fn handle_node_audit_peer(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let addr_str = params
+            .and_then(|p| p.get("addr").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .ok_or_else(|| NexxusError::Io("missing 'addr'".into()))?;
+        let addr: std::net::SocketAddr = addr_str
+            .parse()
+            .map_err(|_| NexxusError::Io(format!("bad addr: {addr_str}")))?;
+        self.network.audit_peer_por(addr).await
     }
 
     async fn handle_node_test_interhost(&self, params: Option<Value>) -> Result<Value, NexxusError> {

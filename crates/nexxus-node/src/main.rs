@@ -532,6 +532,24 @@ fn main() {
                     "ok" => ok,
                     "fail" => fail
                 );
+                // E2: тот же цикл аудирует известных пиров (до 8 за проход)
+                let peers = por_net.known_peers().await;
+                let mut pok: u64 = 0;
+                let mut pfail: u64 = 0;
+                for p in peers.iter().take(8) {
+                    match por_net.audit_peer_por(p.addr).await {
+                        Ok(v) if v["ok"] == true => pok += 1,
+                        _ => pfail += 1,
+                    }
+                }
+                if pok + pfail > 0 {
+                    crate::log_ev!(
+                        if pfail > 0 { "warn" } else { "info" },
+                        "por.peers_audit",
+                        "ok" => pok,
+                        "fail" => pfail
+                    );
+                }
             }
         });
 

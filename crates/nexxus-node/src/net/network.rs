@@ -1210,6 +1210,60 @@ impl P2pNetwork {
         Ok(start.elapsed())
     }
 
+    /// E2: audit a peer with a PoR challenge over the wire. Sends PorChallenge
+    /// with a fresh random seed, expects PorResponse{chunk_hash, response}.
+    /// Verifies against OUR local copy of that chunk: response must equal
+    /// SHA-256(chunk_data || seed). Updates por_ok/por_fail metrics and the
+    /// peer score. Returns a JSON report.
+    pub async fn audit_peer_por(&self, addr: SocketAddr) -> Result<serde_json::Value, NexxusError> {
+        use nexxus_core::wire::payloads::{PorChallenge, PorResponse};
+        use sha2::Digest;
+        let t0 = std::time::Instant::now();
+        let mut stream = TcpStream::connect(addr)
+            .await
+            .map_err(|e| NexxusError::Io(e.to_string()))?;
+        let hs = self.announce_handshake(&mut stream, 0x0011).await?;
+        let seed: [u8; 32] = rand::random();
+        let challenge = PorChallenge { seed, count: 1, deadline_ms: 5000 };
+        self.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::PorChallenge, 0x0012, &challenge)
+            .await?;
+        let (op, _rid, payload) = self.recv_verified_frame(&mut stream, &hs).await?;
+        let (ok, detail) = match op {
+            Opcode::PorResponse => {
+                let resp = PorResponse::decode(&payload)
+                    .map_err(|e| NexxusError::Io(format!("bad PorResponse: {e}")))?;
+                match self.store.get_chunk(&resp.chunk_hash) {
+                    Ok(Some(data)) => {
+                        let mut h = sha2::Sha256::new();
+                        h.update(&data);
+                        h.update(seed);
+                        let expected: [u8; 32] = h.finalize().into();
+                        (expected == resp.response, format!("chunk {}", hex::encode(resp.chunk_hash.0)))
+                    }
+                    _ => (false, format!("chunk {} not in local store", hex::encode(resp.chunk_hash.0))),
+                }
+            }
+            Opcode::ErrorResponse => {
+                let err = nexxus_core::wire::payloads::ErrorResponse::decode(&payload)
+                    .map_err(|e| NexxusError::Io(format!("bad ErrorResponse: {e}")))?;
+                (false, format!("peer error 0x{:04x}: {}", err.code, err.message))
+            }
+            other => (false, format!("unexpected opcode 0x{:02x}", other.to_u8())),
+        };
+        if ok {
+            self.metrics.por_ok.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.metrics.por_fail.fetch_add(1, Ordering::Relaxed);
+        }
+        self.note_peer_result(addr, ok);
+        Ok(serde_json::json!({
+            "addr": addr.to_string(),
+            "ok": ok,
+            "detail": detail,
+            "elapsed_ms": t0.elapsed().as_millis() as u64,
+        }))
+    }
+
     /// Push a chunk to a peer: announce-handshake + StoreChunk, expect StoreChunkAck.
     pub async fn send_store_chunk(
         &self,
@@ -1552,6 +1606,35 @@ mod tests {
         let expected: [u8; 32] = h.finalize().into();
         assert_eq!(resp.response, expected);
 
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn audit_peer_por_ok_over_wire() {
+        // E2: клиентский аудит пира — сервер держит чанк, audit_peer_por
+        // возвращает ok=true и верифицирует ответ против локальной копии.
+        let dir = tempdir().unwrap();
+        let store = Arc::new(ChunkStore::open(dir.path().join("store.redb")).unwrap());
+        let our_id = NodeId([0x46u8; 32]);
+        let net = Arc::new(P2pNetwork::new(our_id, "127.0.0.1:0".parse().unwrap(), store));
+        let net_clone = Arc::clone(&net);
+        let server = tokio::spawn(async move { net_clone.run().await });
+        let mut bound = None;
+        for _ in 0..100 {
+            bound = net.bound_addr().await;
+            if bound.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let listener_addr = bound.expect("listener failed to bind");
+        let data: Vec<u8> = (0..512).map(|i| (i % 251) as u8).collect();
+        let hash = h(&data);
+        net.store.put_chunk(&hash, &data).expect("store chunk");
+
+        let report = net.audit_peer_por(listener_addr).await.unwrap();
+        assert_eq!(report["ok"], true, "report: {report}");
+        assert_eq!(report["addr"], listener_addr.to_string());
         server.abort();
     }
 
