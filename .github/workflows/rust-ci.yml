@@ -102,6 +102,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        with:
-          config-path: .gitleaks.toml
+      - name: Gitleaks detect (full history)
+        # gitleaks-action@v2 требует лицензию; используем официальный docker-образ.
+        run: docker run --rm -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:latest detect --source /repo --config /repo/.gitleaks.toml --exit-code 1 --redact
