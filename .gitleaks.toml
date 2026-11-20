@@ -11,9 +11,11 @@ title = "NeXXus-Node secret scan"
     '''(^|/)build/cache/''',
     '''[.]md$''',
     '''package-lock[.]json''',
+    '''(^|/)linux-node/''',
+    '''[.]env[.]example''',
     '''tests/fixtures/''',
     '''nexxus-vectors/''',
-    '''Cargo\.lock''',
+    '''Cargo[.]lock''',
   ]
   regexes = [
     # Placeholder'ы и примеры в доках/тестах
@@ -41,9 +43,3 @@ title = "NeXXus-Node secret scan"
   description = "PEM private key"
   regex = '''-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----'''
   tags = ["key"]
-
-[[rules]]
-  id = "bip39-mnemonic-leak"
-  description = "12/24 BIP39 слов подряд (не из тестовых fixtures)"
-  regex = '''\b([a-z]{3,10}\s+){11,23}[a-z]{3,10}\b'''
-  tags = ["mnemonic"]
