@@ -1169,8 +1169,18 @@ async function runApi(method, inputs, btn) {
   out.textContent = `→ ${method} ${JSON.stringify(shown)}\n…`;
   try {
     const r = await api(method, params);
-    out.textContent = `✅ ${method} ${JSON.stringify(shown)}\n\n` + JSON.stringify(r, null, 2);
-    addStageLog(`API ${method} ok`, 'success');
+    // E2: penalty/warning-подсветка — por_fail и req_timeouts видны сразу
+    const m = r && r.metrics;
+    let warn = '';
+    if (m && (m.por_fail > 0 || m.req_timeouts > 0 || m.handshake_timeouts > 0)) {
+      const parts = [];
+      if (m.por_fail > 0) parts.push(`PoR fail: ${m.por_fail}`);
+      if (m.req_timeouts > 0) parts.push(`таймауты запросов: ${m.req_timeouts}`);
+      if (m.handshake_timeouts > 0) parts.push(`таймауты рукопожатий: ${m.handshake_timeouts}`);
+      warn = `\n\n⚠️ ${parts.join(' · ')}`;
+    }
+    out.textContent = `✅ ${method} ${JSON.stringify(shown)}\n\n` + JSON.stringify(r, null, 2) + warn;
+    addStageLog(`API ${method} ok${warn ? ' (есть предупреждения)' : ''}`, warn ? 'error' : 'success');
   } catch (e) {
     out.textContent = `❌ ${method} ${JSON.stringify(shown)}\n\nОшибка: ${e}`;
     addStageLog(`API ${method} error: ${e}`, 'error');
