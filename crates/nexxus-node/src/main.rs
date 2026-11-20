@@ -40,6 +40,9 @@ use crate::storage::ChunkStore;
 use crate::local_api::LocalApi;
 use crate::identity_store::load_or_create_identity;
 
+/// E0: момент старта процесса — для метрики `uptime_secs` в node_metrics.
+pub static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 /// Запрет core dumps (RLIMIT_CORE=0): seed/ключи не должны попадать в дампы
 /// памяти процесса на диск. Safe-обёртка `rlimit` (workspace forbids unsafe).
 #[cfg(unix)]
@@ -103,6 +106,7 @@ pub fn vault_pin_from_env_or_credential() -> Option<zeroize::Zeroizing<String>> 
 
 fn main() {
     disable_core_dumps();
+    let _ = START_TIME.set(std::time::Instant::now());
     // Логи arti/Tor по RUST_LOG (по умолчанию — только предупреждения nexxusd).
     #[cfg(feature = "tor")]
     {

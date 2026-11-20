@@ -891,6 +891,20 @@ impl LocalApi {
         let m = self.network.metrics.snapshot();
         let mut v = serde_json::json!({ "metrics": m, "peers_scored": self.network.peer_scores_snapshot().len() });
         v["prom"] = Value::String(self.network.metrics.prom());
+        // E0: prod-observability — uptime и RSS процесса (unix: /proc/self).
+        v["uptime_secs"] = Value::from(crate::START_TIME.elapsed().as_secs());
+        #[cfg(unix)]
+        {
+            if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+                for line in status.lines() {
+                    if let Some(rest) = line.strip_prefix("VmRSS:") {
+                        let kb: u64 = rest.trim().trim_end_matches("kB").trim().parse().unwrap_or(0);
+                        v["rss_kb"] = Value::from(kb);
+                        break;
+                    }
+                }
+            }
+        }
         // E2: storage capacity visibility (cap, used, free).
         if let Ok(used) = self.network.store().store_size() {
             v["store_used_bytes"] = Value::from(used);
