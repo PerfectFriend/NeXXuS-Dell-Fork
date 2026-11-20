@@ -56,6 +56,25 @@ impl ChunkStore {
         })
     }
 
+    /// Открывает СУЩЕСТВУЮЩИЙ стор без создания файла и без write-транзакций
+    /// (для `doctor` и т.п.): если файла нет — ошибка, ничего не создаём.
+    pub fn open_existing<P: AsRef<std::path::Path>>(path: P) -> Result<Self, NexxusError> {
+        let path = path.as_ref().to_path_buf();
+        if !path.is_file() {
+            return Err(NexxusError::Io(format!(
+                "store file does not exist: {}",
+                path.display()
+            )));
+        }
+        let db = Database::open(&path).map_err(|e| NexxusError::Io(format!("redb open: {e}")))?;
+        Ok(Self {
+            db,
+            path,
+            crypto: std::sync::Mutex::new(None),
+            max_store_bytes: std::sync::atomic::AtomicU64::new(0),
+        })
+    }
+
     /// E2: лимит размера стора в байтах (0 = без лимита). Задаётся из
     /// `NEXXUS_MAX_STORE_BYTES` или конфига монитора.
     pub fn set_max_store_bytes(&self, bytes: u64) {

@@ -83,14 +83,23 @@ pub fn load_token(path: &PathBuf) -> io::Result<Option<String>> {
 
 /// Записывает токен с правами 0600 (только владелец).
 fn write_token_private(path: &PathBuf, token: &str) -> io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    // H-11: OpenOptionsExt::mode — unix-only; на Windows создаём обычным способом.
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?
+    };
+    #[cfg(not(unix))]
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o600)
         .open(path)?;
     use std::io::Write;
     file.write_all(token.as_bytes())?;

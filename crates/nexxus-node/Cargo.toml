@@ -34,7 +34,8 @@ hmac = { workspace = true }
 chacha20poly1305 = { workspace = true }
 zeroize = { workspace = true }
 subtle = "2.6"
-rlimit = "0.10"
+# H-11: rlimit — unix-only крейт, на Windows не компилируется; только под cfg(unix).
+# (используется в cfg(unix)-функции disable_core_dumps)
 ed25519-dalek = { workspace = true }
 curve25519-dalek = { workspace = true }
 serde = { workspace = true }
@@ -53,6 +54,9 @@ ureq = { version = "2.12", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+rlimit = "0.10"
 
 [lints]
 workspace = true

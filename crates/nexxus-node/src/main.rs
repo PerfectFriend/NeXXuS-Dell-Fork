@@ -14,6 +14,7 @@ use std::process;
 use std::sync::Arc;
 
 use hex::encode as hex_encode;
+#[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 
 mod net;
@@ -53,6 +54,34 @@ pub fn disable_core_dumps() {}
 
 /// S4: PIN для seed vault: `NEXXUS_SEED_PIN` env → systemd-credential `seed.pin`
 /// (`$CREDENTIALS_DIRECTORY`). Возвращает None, если нигде не задан.
+/// C-5: записывает мнемонику один раз в файл с правами 0600 (только unix;
+/// на Windows — create_new без mode). Не логируется никуда.
+fn write_mnemonic_private(path: &std::path::Path, phrase: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(phrase.as_bytes())?;
+        f.write_all(b"\n")?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?;
+        f.write_all(phrase.as_bytes())?;
+        f.write_all(b"\n")?;
+        Ok(())
+    }
+}
+
 pub fn vault_pin_from_env_or_credential() -> Option<zeroize::Zeroizing<String>> {
     if let Ok(p) = std::env::var("NEXXUS_SEED_PIN") {
         if !p.is_empty() {
@@ -198,8 +227,21 @@ fn main() {
             process::exit(1);
         });
         if let Some(phrase) = &fresh_mnemonic {
-            eprintln!("nexxusd: NEW identity created. Write down this 12-word mnemonic (shown only once):");
-            eprintln!("  {}", phrase.as_str());
+            // C-5: мнемоника НЕ печатается в лог/stderr (попадёт в journal и
+            // лог-файлы). Пишется один раз в файл рядом со стором с правами
+            // 0600 — пользователь читает его вручную и удаляет.
+            let mnem_path = std::path::Path::new(&path).with_file_name("identity.mnemonic");
+            let write_res = write_mnemonic_private(&mnem_path, phrase.as_str());
+            match write_res {
+                Ok(()) => eprintln!(
+                    "nexxusd: NEW identity created. 12-word mnemonic written ONCE to {} (mode 0600) — read it now and delete the file. It is never printed to logs.",
+                    mnem_path.display()
+                ),
+                Err(e) => {
+                    eprintln!("nexxusd: NEW identity created but mnemonic file write failed: {e}");
+                    eprintln!("nexxusd: refusing to print the mnemonic to stderr (C-5); store the phrase from the vault backup instead");
+                }
+            }
         }
         let our_id = node_iden.node_id;
 
@@ -430,9 +472,17 @@ fn main() {
 
         // --- Обработка сигналов завершения ---
         // Корректно завершаем по SIGINT (Ctrl+C) или SIGTERM.
-        let mut sigint = signal(SignalKind::interrupt()).expect("failed to register SIGINT");
-        let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM");
+        // H-11: tokio::signal::unix не существует на Windows — там только ctrl_c.
+        #[cfg(unix)]
+        let (mut sigint, mut sigterm) = {
+            let sigint = signal(SignalKind::interrupt()).expect("failed to register SIGINT");
+            let sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM");
+            (sigint, sigterm)
+        };
 
+        // H-11: tokio::select! в этой версии tokio не принимает #[cfg] на
+        // плечах, поэтому два отдельных select! для unix / не-unix.
+        #[cfg(unix)]
         tokio::select! {
             _ = p2p_task => {
                 eprintln!("nexxusd: P2P task exited");
@@ -448,6 +498,21 @@ fn main() {
             }
             _ = sigterm.recv() => {
                 eprintln!("nexxusd: received SIGTERM, shutting down");
+            }
+        }
+        #[cfg(not(unix))]
+        tokio::select! {
+            _ = p2p_task => {
+                eprintln!("nexxusd: P2P task exited");
+            }
+            _ = api_task => {
+                eprintln!("nexxusd: API task exited");
+            }
+            _ = epoch_task => {
+                eprintln!("nexxusd: epoch task exited");
+            }
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("nexxusd: received Ctrl+C, shutting down");
             }
         }
     });

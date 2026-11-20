@@ -27,10 +27,14 @@ impl ChunkAead {
         let key = chunk_key(vault_key, chunk_index);
         let aead = ChaCha20Poly1305::new_from_slice(&key)
             .map_err(|_| NexxusError::Io("aead key init failed".into()))?;
-        let nonce = Nonce::from_slice(&[0u8; 12]); // fixed nonce per (key, index) — key is unique per chunk
+        // C-3: nonce СЛУЧАЙНЫЙ на каждый seal. Раньше здесь был фиксированный
+        // нулевой nonce на (key, index) — все шарды одного чанка получали
+        // один keystream, и XOR двух шардов давал XOR открытых текстов.
+        let nonce_bytes: [u8; 12] = rand::random();
+        let nonce = Nonce::from_slice(&nonce_bytes);
         let ct = aead.encrypt(nonce, plaintext).map_err(|_| NexxusError::AeadAuthFailed)?;
         let mut out = Vec::with_capacity(12 + ct.len());
-        out.extend_from_slice(&[0u8; 12]);
+        out.extend_from_slice(&nonce_bytes);
         out.extend_from_slice(&ct);
         Ok(out)
     }
@@ -100,5 +104,24 @@ mod tests {
         let mut tampered = sealed.clone();
         tampered[13] ^= 0xff;
         assert!(ChunkAead::open(&vault_key, 0, &tampered).is_err());
+    }
+
+    /// C-3 (чек-лист аудита часть 2, пункт 5): два seal с одним (key, index)
+    /// не должны делить keystream — иначе ct_a ^ ct_b == pt_a ^ pt_b.
+    #[test]
+    fn shards_of_one_chunk_do_not_share_keystream() {
+        let key = [7u8; 32];
+        let a = [0u8; 64];
+        let b = [0xffu8; 64];
+        let sa = ChunkAead::seal(&key, 0, &a).unwrap();
+        let sb = ChunkAead::seal(&key, 0, &b).unwrap();
+        // формат: nonce(12) || ciphertext || tag(16)
+        let xor: Vec<u8> = sa[12..76].iter().zip(&sb[12..76]).map(|(x, y)| x ^ y).collect();
+        assert_ne!(xor, vec![0xffu8; 64], "keystream reuse: ct_a ^ ct_b == pt_a ^ pt_b");
+        // nonce реально случайный: два seal одного plaintext различаются
+        let s1 = ChunkAead::seal(&key, 0, &a).unwrap();
+        let s2 = ChunkAead::seal(&key, 0, &a).unwrap();
+        assert_ne!(s1, s2, "nonce должен быть случайным на каждый seal");
+        assert_ne!(&s1[..12], &s2[..12]);
     }
 }

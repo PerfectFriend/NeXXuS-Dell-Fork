@@ -43,6 +43,11 @@ pub struct EncryptedVault {
     pub created_at: u64,
     #[serde(default = "default_kdf_rounds")]
     pub kdf_rounds: u32,
+    /// C-4: алгоритм хеша PIN. `None` = legacy SHA-256(PIN||salt) из SDK
+    /// (оставлен только для чтения старых vault); новые vault получают
+    /// `Some("pbkdf2-sha256-<rounds>")` — перебор PIN тогда стоит как KDF.
+    #[serde(default)]
+    pub pin_hash_algo: Option<String>,
 }
 
 fn default_kdf_rounds() -> u32 {
@@ -67,12 +72,32 @@ pub struct DecryptResult {
     pub is_duress: bool,
 }
 
-/// SHA-256(PIN || salt) в hex — формат хеша как в SDK.
+/// SHA-256(PIN || salt) в hex — legacy-формат хеша как в SDK.
+/// НЕ использовать для новых vault (C-4): перебирается мгновенно.
 pub fn hash_pin(pin: &str, salt: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(pin.as_bytes());
     hasher.update(salt);
     hex::encode(hasher.finalize())
+}
+
+/// C-4: хеш PIN через PBKDF2-HMAC-SHA256 с теми же rounds, что и KDF шифра —
+/// быстрый перебор PIN (как по голому SHA-256) больше не работает.
+fn pin_hash_kdf(pin: &str, salt: &[u8], rounds: u32) -> String {
+    let mut h = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(pin.as_bytes(), salt, rounds, &mut h);
+    hex::encode(h)
+}
+
+/// Хеш введённого PIN в формате, ожидаемом данным vault (с учётом algo).
+fn entered_pin_hash(vault: &EncryptedVault, pin: &str, salt: &[u8]) -> String {
+    match vault.pin_hash_algo.as_deref() {
+        Some(a) if a.starts_with("pbkdf2-sha256-") => {
+            let rounds: u32 = a["pbkdf2-sha256-".len()..].parse().unwrap_or(PBKDF2_ROUNDS);
+            pin_hash_kdf(pin, salt, rounds)
+        }
+        _ => hash_pin(pin, salt),
+    }
 }
 
 /// 256-битный ключ из PIN через PBKDF2-HMAC-SHA256 с заданным числом раундов.
@@ -121,13 +146,14 @@ pub fn encrypt_vault_payload_rounds(
         ciphertext_hex: hex::encode(ciphertext),
         iv_hex: hex::encode(nonce_bytes),
         salt_hex: hex::encode(salt),
-        pin_hash_hex: hash_pin(primary_pin, &salt),
-        duress_hash_hex: duress_pin.map(|dp| hash_pin(dp, &salt)),
+        pin_hash_hex: pin_hash_kdf(primary_pin, &salt, rounds),
+        duress_hash_hex: duress_pin.map(|dp| pin_hash_kdf(dp, &salt, rounds)),
         created_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs(),
         kdf_rounds: rounds,
+        pin_hash_algo: Some(format!("pbkdf2-sha256-{rounds}")),
     };
 
     serde_json::to_string(&vault).map_err(|e| NexxusError::Vault(format!("сериализация: {e}")))
@@ -139,7 +165,7 @@ pub fn check_pin(vault_json: &str, entered_pin: &str) -> Result<PinCheck, Nexxus
         .map_err(|e| NexxusError::Vault(format!("невалидный JSON vault: {e}")))?;
     let salt = hex::decode(&vault.salt_hex)
         .map_err(|e| NexxusError::Vault(format!("невалидный salt: {e}")))?;
-    let entered_hash = hash_pin(entered_pin, &salt);
+    let entered_hash = entered_pin_hash(&vault, entered_pin, &salt);
 
     if let Some(ref duress_hash) = vault.duress_hash_hex {
         if &entered_hash == duress_hash {
@@ -165,7 +191,7 @@ pub fn decrypt_vault_payload(vault_json: &str, entered_pin: &str) -> Result<Decr
     let ciphertext = hex::decode(&vault.ciphertext_hex)
         .map_err(|e| NexxusError::Vault(format!("невалидный ciphertext: {e}")))?;
 
-    let entered_hash = hash_pin(entered_pin, &salt);
+    let entered_hash = entered_pin_hash(&vault, entered_pin, &salt);
 
     if let Some(ref duress_hash) = vault.duress_hash_hex {
         if &entered_hash == duress_hash {

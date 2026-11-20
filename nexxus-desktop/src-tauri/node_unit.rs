@@ -79,6 +79,7 @@ pub const ALLOWED_UNIT_DIRECTIVES: &[&str] = &[
     "StartLimitBurst",
     "NoNewPrivileges",
     "PrivateTmp",
+    "LoadCredential",
     "WantedBy",
 ];
 
@@ -86,7 +87,20 @@ pub const ALLOWED_UNIT_DIRECTIVES: &[&str] = &[
 ///
 /// Возвращает `Err`, если значение конфига содержит управляющие символы или
 /// недопустимое имя переменной: unit-файл не пишется «как получилось».
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn render_unit(cfg: &NodeConfig, bin: &Path, store: &Path) -> Result<String, String> {
+    render_unit_with_seed_cred(cfg, bin, store, None)
+}
+
+/// Как `render_unit`, но с опциональным systemd-credential для S4:
+/// `LoadCredential=seed.pin:<path>` — тогда демон читает PIN из
+/// `$CREDENTIALS_DIRECTORY/seed.pin` (см. `vault_pin_from_env_or_credential`).
+pub fn render_unit_with_seed_cred(
+    cfg: &NodeConfig,
+    bin: &Path,
+    store: &Path,
+    seed_pin_file: Option<&Path>,
+) -> Result<String, String> {
     let mut env_lines = String::new();
     for (k, v) in crate::node_config::to_env(cfg) {
         if !valid_env_key(&k) {
@@ -94,6 +108,11 @@ pub fn render_unit(cfg: &NodeConfig, bin: &Path, store: &Path) -> Result<String,
         }
         env_lines.push_str(&format!("Environment=\"{k}={}\"\n", unit_quote(&v)?));
     }
+
+    let cred_lines = match seed_pin_file {
+        Some(p) => format!("LoadCredential=seed.pin:{}\n", unit_quote(&p.to_string_lossy())?),
+        None => String::new(),
+    };
 
     let dir = store
         .parent()
@@ -111,7 +130,8 @@ pub fn render_unit(cfg: &NodeConfig, bin: &Path, store: &Path) -> Result<String,
          [Service]\n\
          Type=simple\n\
          WorkingDirectory=\"{dir}\"\n\
-         {env_lines}\n\
+         {env_lines}\
+         {cred_lines}\
          ExecStart=\"{bin}\" \"{store}\"\n\
          Restart=on-failure\n\
          RestartSec=5\n\
@@ -123,9 +143,25 @@ pub fn render_unit(cfg: &NodeConfig, bin: &Path, store: &Path) -> Result<String,
          WantedBy=default.target\n",
         dir = unit_quote(&dir)?,
         env_lines = env_lines,
+        cred_lines = cred_lines,
         bin = unit_quote(&bin.to_string_lossy())?,
         store = unit_quote(&store.to_string_lossy())?,
     ))
+}
+
+/// Путь к файлу PIN для systemd-credential (S4): `NEXXUS_SEED_PIN_FILE` или
+/// `/etc/nexxus-node/seed.pin`, если существует. None — credential не подключаем.
+pub fn seed_pin_credential_path() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("NEXXUS_SEED_PIN_FILE") {
+        if !p.is_empty() && std::path::Path::new(&p).is_file() {
+            return Some(std::path::PathBuf::from(p));
+        }
+    }
+    let default = std::path::PathBuf::from("/etc/nexxus-node/seed.pin");
+    if default.is_file() {
+        return Some(default);
+    }
+    None
 }
 
 /// Устанавливает (создаёт/обновляет) user-юнит ноды и перечитывает
@@ -136,7 +172,12 @@ pub fn install_unit(cfg: &NodeConfig) -> Result<PathBuf, String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Не удалось создать {}: {e}", parent.display()))?;
     }
-    let content = render_unit(cfg, &node_binary_path(), &node_store_path())?;
+    let content = render_unit_with_seed_cred(
+        cfg,
+        &node_binary_path(),
+        &node_store_path(),
+        seed_pin_credential_path().as_deref(),
+    )?;
     std::fs::write(&path, content).map_err(|e| format!("Не удалось записать {}: {e}", path.display()))?;
     daemon_reload()?;
     Ok(path)

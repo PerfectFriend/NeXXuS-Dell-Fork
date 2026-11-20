@@ -29,15 +29,33 @@ pub trait ProcessBackend {
     fn main_pid(&self) -> Option<u32>;
 }
 
+/// C-5: лог-файл демона открывается с правами 0600 (только владелец),
+/// т.к. туда может попасть чувствительное. На не-unix — обычное открытие.
+fn open_log_private(log: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(log)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+    }
+}
+
 /// Строит команду запуска: env из конфига + лог в файл.
 pub(crate) fn build_spawn_cmd(cfg: &NodeConfig, bin: &str, store: &str, log: &Path) -> Result<Command, String> {
     if let Some(parent) = log.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let log_out = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)
+    let log_out = open_log_private(log)
         .map_err(|e| format!("Не удалось открыть лог {}: {e}", log.display()))?;
     let log_err = log_out
         .try_clone()

@@ -50,13 +50,17 @@ pub async fn upload_file(
     let mut chunk_entries = Vec::with_capacity(chunks.len());
     let mut chunk_roots = Vec::with_capacity(chunks.len());
     for (i, plain) in chunks.iter().enumerate() {
-        let shards = rs::encode(plain);
+        // C-3: сначала AEAD-seal всего чанка целиком (случайный nonce внутри),
+        // затем RS-кодирование ШИФРТЕКСТА. Раньше RS делался над plaintext,
+        // а seal вызывался на каждый шард с одним (key, index) и нулевым
+        // nonce — все 6 шардов делили keystream.
+        let sealed = ChunkAead::seal(&file_key, i as u64, plain)?;
+        let shards = rs::encode(&sealed);
         let mut shard_hashes: Vec<ChunkHash> = Vec::with_capacity(rs::TOTAL_SHARDS);
         for (s, shard) in shards.iter().enumerate() {
             let _ = s;
-            let sealed = ChunkAead::seal(&file_key, i as u64, shard)?;
-            let hash = ChunkHash(sha256(&sealed));
-            store.put_chunk(&hash, &sealed)?;
+            let hash = ChunkHash(sha256(shard));
+            store.put_chunk(&hash, shard)?;
             for p in &peers {
                 // E6 onion-only: чанк с флагом не отдаётся clearnet-пирам (routing table = TCP).
                 if store.is_onion_only(&hash)? {
@@ -66,7 +70,7 @@ pub async fn upload_file(
                     chunk_hash: hash,
                     file_id,
                     chunk_index: i as u32,
-                    data: sealed.clone(),
+                    data: shard.clone(),
                 };
                 let _ = net.send_store_chunk(p.addr, &sc).await;
             }
@@ -78,6 +82,7 @@ pub async fn upload_file(
         chunk_entries.push(json!({
             "index": i,
             "plain_len": plain.len(),
+            "sealed_len": sealed.len(),
             "shard_hashes": shard_hashes.iter().map(|h| hex::encode(h.0)).collect::<Vec<_>>(),
         }));
     }
@@ -131,6 +136,9 @@ pub async fn download_file(
     for c in &chunk_list {
         let index = c["index"].as_u64().unwrap_or(0);
         let plain_len = c["plain_len"].as_u64().unwrap_or(0) as usize;
+        // C-3: seal-then-RS — шард = кусок шифртекста; sealed_len = plain_len + 28 (nonce+tag)
+        let sealed_len = c["sealed_len"].as_u64().unwrap_or(0) as usize;
+        let sealed_len = if sealed_len == 0 { plain_len + 28 } else { sealed_len };
         let shard_hexes = c["shard_hashes"].as_array().cloned().unwrap_or_default();
         let shard_hashes: Vec<ChunkHash> = shard_hexes
             .iter()
@@ -146,7 +154,7 @@ pub async fn download_file(
             if shards.len() >= rs::DATA_SHARDS {
                 break;
             }
-            let sealed = match store.get_chunk(h)? {
+            let shard_raw = match store.get_chunk(h)? {
                 Some(d) => d,
                 None => {
                     let mut got = None;
@@ -163,11 +171,11 @@ pub async fn download_file(
                     })?
                 }
             };
-            let shard = ChunkAead::open(&file_key, index, &sealed)?;
-            shards.push((shard, s));
+            shards.push((shard_raw, s));
         }
         let refs: Vec<(&[u8], usize)> = shards.iter().map(|(d, i)| (d.as_slice(), *i)).collect();
-        let plain = rs::decode(&refs, plain_len)?;
+        let sealed = rs::decode(&refs, sealed_len)?;
+        let plain = ChunkAead::open(&file_key, index, &sealed)?;
         chunk_roots.push(merkle::merkle_root(
             &shard_hashes.iter().map(|h| h.0).collect::<Vec<_>>(),
         ));

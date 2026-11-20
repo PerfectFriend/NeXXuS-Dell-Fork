@@ -87,18 +87,19 @@ fn merkle_root_of_file(data: &[u8]) -> [u8; 32] {
     nexxus_core::merkle::merkle_root(&leaves)
 }
 
-/// Двухуровневый root как у ноды (vault.rs): чанк → RS-shards → seal(key, i, shard)
-/// → sha256 → chunk_root; root = merkle(chunk_roots). Нужен per-file ключ из манифеста.
+/// Двухуровневый root как у ноды (vault.rs): чанк → seal(key, i, chunk) целиком
+/// (случайный nonce) → RS(shifротекст) → sha256(shard) → chunk_root;
+/// root = merkle(chunk_roots). Нужен per-file ключ из манифеста.
 fn merkle_root_of_file_sealed(data: &[u8], key: &[u8; 32]) -> Result<[u8; 32], String> {
     let chunks = nexxus_core::chunk::slice(data);
     let mut chunk_roots = Vec::with_capacity(chunks.len());
     for (i, plain) in chunks.iter().enumerate() {
-        let shards = nexxus_core::rs::encode(plain);
+        let sealed = nexxus_core::chunk::ChunkAead::seal(key, i as u64, plain)
+            .map_err(|e| e.to_string())?;
+        let shards = nexxus_core::rs::encode(&sealed);
         let mut shard_hashes = Vec::with_capacity(shards.len());
         for shard in shards.iter() {
-            let sealed = nexxus_core::chunk::ChunkAead::seal(key, i as u64, shard)
-                .map_err(|e| e.to_string())?;
-            shard_hashes.push(Sha256::digest(&sealed).into());
+            shard_hashes.push(Sha256::digest(shard).into());
         }
         chunk_roots.push(nexxus_core::merkle::merkle_root(&shard_hashes));
     }
@@ -486,9 +487,18 @@ fn open_store(rest: &[String]) -> Result<(PathBuf, crate::storage::ChunkStore), 
 /// encryption flag, identity, seed vault, backup count, problems.
 fn cmd_doctor(rest: &[String]) -> i32 {
     let positional: Vec<String> = rest.iter().filter(|a| !a.starts_with('-')).cloned().collect();
-    let (_path, db) = match open_store(&positional) {
-        Ok(x) => x,
-        Err(e) => return fail(&e),
+    // Чек-лист аудита (п.3): doctor НЕ должен ничего создавать — открываем
+    // только существующий стор, иначе reported problem + exit 1.
+    let path = positional
+        .first()
+        .map(PathBuf::from)
+        .unwrap_or_else(default_store);
+    let (_path, db) = match crate::storage::ChunkStore::open_existing(&path) {
+        Ok(db) => (path, db),
+        Err(e) => {
+            eprintln!("nexxusd doctor: {e} (файл не создан)");
+            return 1;
+        }
     };
     let report = crate::backup::doctor(&db);
     println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
