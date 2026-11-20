@@ -108,6 +108,12 @@ pub fn backup_store(store: &ChunkStore) -> Result<BackupManifest, NexxusError> {
     let name = format!("backup-{ts}-{}", now_millis() % 1000);
     let bdir = backups_dir(store);
     std::fs::create_dir_all(&bdir).map_err(|e| NexxusError::Io(format!("mkdir {}: {e}", bdir.display())))?;
+    // BKP-02: каталог бэкапов — только владелец (содержит копии зашифрованного стора).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&bdir, std::fs::Permissions::from_mode(0o700));
+    }
     // BKP-01: exclusive lock на каталоге бэкапов на всё время бэкапа.
     #[cfg(unix)]
     let _lock = lock_file(&bdir.join(".backup.lock"), true)?;
@@ -398,6 +404,16 @@ mod tests {
         // path traversal / junk отклоняется
         assert!(delete_backup(&store, "../store.redb").is_err());
         assert!(delete_backup(&store, "no-such-backup").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backups_dir_is_0700_after_backup() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, store) = store_with_data();
+        let _ = backup_store(&store).unwrap();
+        let md = std::fs::metadata(backups_dir(&store)).unwrap();
+        assert_eq!(md.permissions().mode() & 0o777, 0o700, "backups/ must be 0700");
     }
 
     #[test]
