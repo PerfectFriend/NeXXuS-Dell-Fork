@@ -892,7 +892,12 @@ impl LocalApi {
         let mut v = serde_json::json!({ "metrics": m, "peers_scored": self.network.peer_scores_snapshot().len() });
         v["prom"] = Value::String(self.network.metrics.prom());
         // E0: prod-observability — uptime и RSS процесса (unix: /proc/self).
-        v["uptime_secs"] = Value::from(crate::START_TIME.elapsed().as_secs());
+        v["uptime_secs"] = Value::from(
+            crate::START_TIME
+                .get()
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0),
+        );
         #[cfg(unix)]
         {
             if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
