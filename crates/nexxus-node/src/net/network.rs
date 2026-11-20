@@ -391,6 +391,15 @@ impl P2pNetwork {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        // M-16/H-3: пир с плохим score (много фейлов подряд) вытесняется из
+        // routing table, освобождая место живым из replacement cache.
+        let dead = !ok && e.fail >= 5 && e.fail >= 2 * e.success;
+        drop(scores);
+        if dead {
+            if let Ok(mut rt) = self.routing.try_lock() {
+                rt.evict_addr(&addr);
+            }
+        }
     }
 
     /// E1: record measured RTT for a peer (EWMA, alpha=1/4).

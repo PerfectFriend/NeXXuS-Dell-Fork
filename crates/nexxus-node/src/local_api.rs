@@ -1084,7 +1084,7 @@ impl LocalApi {
         // BS-01: если в конфиге задан pin registry_pub — проверяем до store_set.
         if let Some(pin) = self.bootstrap_registry_pin.lock().unwrap().clone() {
             if env.payload.registry_pub.to_lowercase() != pin {
-                crate::log_ev!("warn", "bootstrap.list.rejected_pin", "got" => &env.payload.registry_pub[..16.min(env.payload.registry_pub.len())]);
+                crate::log_ev!("warn", "bootstrap.list.rejected_pin", "got" => &env.payload.registry_pub.chars().take(16).collect::<String>());
                 return Err(NexxusError::Io(
                     "bootstrap registry_pub does not match pinned bootstrap_registry_pub".into(),
                 ));

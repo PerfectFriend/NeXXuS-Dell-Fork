@@ -23,13 +23,20 @@ pub struct Peer {
 #[derive(Clone, Debug)]
 pub struct RoutingTable {
     buckets: [VecDeque<Peer>; BUCKETS],
+    /// M-16/H-3: replacement cache — когда бакет полон, новый пир идёт сюда,
+    /// а не отбрасывается молча; `evict_dead` вытесняет мёртвых из бакета.
+    replacements: VecDeque<Peer>,
     our_id: NodeId,
 }
+
+/// Max entries in the replacement cache (per table, not per bucket).
+const REPLACEMENT_CAP: usize = 64;
 
 impl RoutingTable {
     pub fn new(our_id: NodeId) -> Self {
         Self {
             buckets: array::from_fn(|_| VecDeque::new()),
+            replacements: VecDeque::new(),
             our_id,
         }
     }
@@ -49,8 +56,8 @@ impl RoutingTable {
     }
 
     /// Insert or refresh a peer. Existing peer is moved to the front (most
-    /// recently seen). Full buckets drop the new peer (replacement cache
-    /// omitted in Phase 7).
+    /// recently seen). Full bucket → peer goes to the replacement cache
+    /// (M-16), evicted when a bucket member is known dead.
     pub fn insert(&mut self, peer: Peer) {
         if peer.node_id == self.our_id {
             return;
@@ -64,8 +71,54 @@ impl RoutingTable {
         }
         if bucket.len() < K {
             bucket.push_front(peer);
+        } else {
+            // bucket full: keep in replacement cache instead of silent drop
+            if !self.replacements.iter().any(|p| p.node_id == peer.node_id) {
+                self.replacements.push_front(peer);
+                if self.replacements.len() > REPLACEMENT_CAP {
+                    self.replacements.pop_back();
+                }
+            }
         }
-        // bucket full: silently drop (replacement cache in Phase 8)
+    }
+
+    /// M-16: пометить пиров мёртвыми — они удаляются из бакетов, а их места
+    /// занимают лучшие кандидаты из replacement cache. Возвращает число
+    /// вытесненных записей.
+    pub fn evict_dead(&mut self, dead: &[NodeId]) -> usize {
+        if dead.is_empty() {
+            return 0;
+        }
+        let mut evicted = 0;
+        for bucket in self.buckets.iter_mut() {
+            let before = bucket.len();
+            bucket.retain(|p| !dead.contains(&p.node_id));
+            evicted += before - bucket.len();
+        }
+        // дозаполнить бакеты из replacement cache
+        while let Some(cand) = self.replacements.pop_front() {
+            let idx = Self::bucket_index(&cand.node_id, &self.our_id);
+            let bucket = &mut self.buckets[idx];
+            if bucket.len() < K && !bucket.iter().any(|p| p.node_id == cand.node_id) {
+                bucket.push_back(cand);
+            }
+        }
+        evicted
+    }
+
+    /// M-16: evict a peer by socket address (used when its score says dead).
+    /// Returns true if a bucket entry was removed.
+    pub fn evict_addr(&mut self, addr: &SocketAddr) -> bool {
+        let id = self
+            .buckets
+            .iter()
+            .flatten()
+            .find(|p| &p.addr == addr)
+            .map(|p| p.node_id);
+        match id {
+            Some(id) => self.evict_dead(&[id]) > 0,
+            None => false,
+        }
     }
 
     /// Total number of known peers across all buckets.
@@ -214,5 +267,39 @@ mod tests {
         );
         // identical ids -> idx 0 (no differing bit)
         assert_eq!(RoutingTable::bucket_index(&nid(0x00), &nid(0x00)), 0);
+    }
+
+    #[test]
+    fn full_bucket_goes_to_replacement_and_evict_backfills() {
+        // M-16: полный бакет не отбрасывает нового пира молча — он в
+        // replacement cache; evict_dead вытесняет мёртвого и ставит кандидата.
+        let our = nid(0x00);
+        let mut rt = RoutingTable::new(our);
+        // все эти пиры в одном бакете (XOR с нашим id даёт старший бит в последнем байте)
+        let mut peers = Vec::new();
+        for i in 0..K {
+            // node_id = 0x80...00 | i в последнем байте — все в бакете 255
+            let mut id = [0u8; 32];
+            id[0] = 0x80;
+            id[31] = (i + 1) as u8;
+            peers.push(Peer { node_id: NodeId(id), addr: "127.0.0.1:5000".parse().unwrap() });
+        }
+        for p in &peers {
+            rt.insert(p.clone());
+        }
+        assert_eq!(rt.len(), K);
+        // новый пир в тот же бакет — в replacement
+        let mut extra_id = [0u8; 32];
+        extra_id[0] = 0x80;
+        extra_id[31] = 0xff;
+        let extra = Peer { node_id: NodeId(extra_id), addr: "127.0.0.1:6000".parse().unwrap() };
+        rt.insert(extra.clone());
+        assert_eq!(rt.len(), K, "полный бакет не растёт");
+        // evict мёртвого → на его место встаёт replacement
+        let evicted = rt.evict_dead(&[peers[0].node_id]);
+        assert_eq!(evicted, 1);
+        assert_eq!(rt.len(), K, "после evict бак снова полон за счёт replacement");
+        assert!(rt.contains(&extra.node_id), "replacement пир попал в бакет");
+        assert!(!rt.contains(&peers[0].node_id), "мёртвый вытеснен");
     }
 }
