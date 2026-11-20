@@ -27,3 +27,4 @@ target/
 
 # build-артефакты мобильного приложения не в репозитории
 nexxus-mobile/app/build/
+.leaks/

@@ -18,8 +18,10 @@ title = "NeXXus-Node secret scan"
   regexes = [
     # Placeholder'ы и примеры в доках/тестах
     '''(?i)(example|placeholder|dummy|test|changeme|xxx|your[-_]?token|insert[-_]?here)''',
-    # BIP39 тестовые мнемоники (12x "abandon" и т.п.)
-    '''abandon.*about''',
+    # Публичные BIP39 тест-векторы (не секреты)
+    '''abandon abandon abandon''',
+    '''legal winner thank year''',
+    '''letter advice cage absurd''',
   ]
 
 [[rules]]
