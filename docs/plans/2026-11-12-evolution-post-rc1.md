@@ -47,18 +47,20 @@
 
 ---
 
-### Фаза E1 — «Надёжность сети» (3–6 недель)
+### Фаза E1 — «Надёжность сети» (3–6 недель) — ✅ ЗАКРЫТА 2026-11-20
 *Цель: меньше eclipse / DoS-чувствительности, лучше observability.*
 
 | Функция | Зачем | Заметки |
 |---------|--------|---------|
-| Reputation / soft-score пиров | ✅ DONE: score (success/fail + EWMA RTT), eviction lowest-score при full table ниже порога 40, метрика peers_evicted, THREAT_MODEL обновлён | eviction не рвёт живые соединения |
-| Метрики Prometheus / JSON | Мониторинг без Telegram | `/metrics` только на localhost или по токену |
-| Structured logging | ✅ DONE: JSON-lines события (conn.accepted/rejected_ip, handshake.timeout, backup.ok/fail) через log_ev!, без секретов | остальной лог пока текстовый |
-| Connection quality hints | RTT per peer: node_ping_peer + EWMA rtt_ms в PeerScore, UI-кнопка Ping — ✅ DONE | loss — нет (нужен счётчик retransmit, отдельно) |
-| Опциональный STUN / hole-punching | Lab без Tor | Не ломать onion-профиль |
+| Reputation / soft-score пиров | ✅ DONE: score (success/fail + EWMA RTT), eviction lowest-score при full table ниже порога 40, метрика peers_evicted, THREAT_MODEL обновлён | + half-life decay 24ч (2026-11-20, `PeerScore::decay`), eviction мёртвых по score `fail≥5 && fail≥2·success` — не рвёт живые соединения |
+| Метрики Prometheus / JSON | ✅ DONE: `/metrics` plain-HTTP, token-gated; JSON + prom text в `node_metrics` | localhost по умолчанию |
+| Structured logging | ✅ DONE: JSON-lines через log_ev!; **2026-11-20**: redaction зарегистрированных секретов (`register_secret`, API-токен при старте), дедлок рекурсии исправлен, регрессионный тест | без секретов в логах — закреплено тестом |
+| Connection quality hints | ✅ DONE: node_ping_peer + EWMA rtt_ms в PeerScore, UI-кнопка Ping | loss — нет (retransmit counter, отдельно) |
+| Routing: replacement cache | ✅ DONE 2026-11-20 (M-16/H-3): полный k-bucket → replacement cache (cap 64), `evict_dead`/`evict_addr` дозаполняют бакет; тест `full_bucket_goes_to_replacement_and_evict_backfills` | раньше пир молча отбрасывался |
+| M-18: паника на не-ASCII в логе | ✅ DONE 2026-11-20: срез по `chars().take(16)` вместо байтов | |
+| Опциональный STUN / hole-punching | Lab без Tor | Не ломать onion-профиль — отложено, не RC-блокер |
 
-**Безопасность:** score не должен стать вектором «накрутил и вытеснил честных» — пороги + decay, документировать.
+**Безопасность:** score не вектор «накрутил и вытеснил честных» — пороги + decay, задокументировано.
 
 ---
 
@@ -69,7 +71,7 @@
 |---------|----------|
 | **Реальные квоты диска** | Не только «64 MiB foreign» / abstract sections — проверка free space + user-defined cap |
 - **Политики ретенции** | TTL чанков (`node_chunk_ttl`), pin/unpin (`node_chunk_pin`/`node_chunk_unpin`), GC просроченных (`node_gc`), lazy-expiry в `get_chunk`; pin защищает и от TTL, и от GC |
-| **Доказательства хранения (PoR) в расписании** | Уже есть challenge; сделать периодический audit_holder + penalty в UI |
+| **Доказательства хранения (PoR) в расписании** | ✅ DONE 2026-11-20: self-audit цикл в `main.rs` (`NEXXUS_POR_AUDIT_SECS`, дефолт 6ч, 0=off): sample до 64 чанков, SHA-256(data)==hash, метрики por_ok/por_fail + `log_ev!("por.audit")`; помимо этого есть wire PoR challenge/response | периодический audit_holder со стороны пиров — следующая итерация |
 | **Импорт/экспорт архивов** | Зашифрованный bundle (chunk set + manifest) для cold backup вне redb |
 | **Версионирование файлов (optional)** | Не git; простой history указателей в журнале владельца |
 | **drive/ как FUSE или sync-folder** | Только если threat model ясен: plaintext folder = plaintext |
