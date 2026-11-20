@@ -6,8 +6,14 @@ title = "NeXXus-Node secret scan"
   paths = [
     '''(^|/)docs/''',
     '''(^|/)\.github/''',
+    '''(^|/)node_modules/''',
+    '''(^|/)target/''',
+    '''(^|/)build/cache/''',
+    '''[.]md$''',
+    '''package-lock[.]json''',
     '''tests/fixtures/''',
     '''nexxus-vectors/''',
+    '''Cargo\.lock''',
   ]
   regexes = [
     # Placeholder'ы и примеры в доках/тестах

@@ -104,4 +104,7 @@ jobs:
           fetch-depth: 0
       - name: Gitleaks detect (full history)
         # gitleaks-action@v2 требует лицензию; используем официальный docker-образ.
-        run: docker run --rm -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:latest detect --source /repo --config /repo/.gitleaks.toml --exit-code 1 --redact
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:latest detect \
+            --source /repo --config /repo/.gitleaks.toml --exit-code 1 --redact \
+            --report-path /tmp/leaks.json --report-format json || { cat /tmp/leaks.json 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); [print(f['RuleID'], f['File'], f.get('Line','')) for f in d]" 2>/dev/null; exit 1; }
