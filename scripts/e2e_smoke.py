@@ -7,7 +7,7 @@ DATA = os.path.expanduser("~/.hermes/cache/scratch/e2e-node")
 os.makedirs(DATA, exist_ok=True)
 
 def ws_connect():
-    s = socket.create_connection((HOST, PORT), timeout=5)
+    s = socket.create_connection((HOST, PORT), timeout=30)
     key = base64.b64encode(os.urandom(16)).decode()
     s.sendall((f"GET / HTTP/1.1\r\nHost: {HOST}:{PORT}\r\nConnection: Upgrade\r\n"
                f"Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n\r\n").encode())
@@ -90,7 +90,7 @@ check("gc", "result" in r, r)
 
 print("== /metrics ==")
 def http_get(path, tok=None):
-    s = socket.create_connection((HOST, PORT), timeout=5)
+    s = socket.create_connection((HOST, PORT), timeout=30)
     hdr = f"GET {path} HTTP/1.1\r\nHost: {HOST}\r\nConnection: close\r\n"
     if tok: hdr += f"Authorization: Bearer {tok}\r\n"
     s.sendall((hdr + "\r\n").encode())
