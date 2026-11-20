@@ -193,6 +193,11 @@ fn main() {
     let epoch_secs: u64 = crate::node_config::cfg_or_env(&conf, "epoch_secs", "NEXXUS_EPOCH_SECS", "300")
         .parse()
         .unwrap_or(300);
+    // E2: период self-audit PoR (секунды; 0 = выключено). По умолчанию 6 часов.
+    let por_audit_secs: u64 =
+        crate::node_config::cfg_or_env(&conf, "por_audit_secs", "NEXXUS_POR_AUDIT_SECS", "21600")
+            .parse()
+            .unwrap_or(21600);
 
     // --- Tokio runtime ---
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
@@ -477,6 +482,59 @@ fn main() {
             }
         });
 
+        // --- E2: scheduled self-audit PoR — периодически сверяем локальные
+        // чанки (SHA-256(data) == hash) и пишем счётчики в метрики + log_ev.
+        let por_store = Arc::clone(&store);
+        let por_net = Arc::clone(&net);
+        let por_task = tokio::spawn(async move {
+            if por_audit_secs == 0 {
+                return;
+            }
+            const SAMPLE_CAP: usize = 64;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(por_audit_secs)).await;
+                let hashes = match por_store.list_chunk_hashes() {
+                    Ok(h) => h,
+                    Err(_) => continue,
+                };
+                if hashes.is_empty() {
+                    continue;
+                }
+                // детерминированная выборка: каждый por_audit_secs старт с другого offset
+                let start = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0) as usize)
+                    % hashes.len();
+                let mut ok: u64 = 0;
+                let mut fail: u64 = 0;
+                for i in 0..hashes.len().min(SAMPLE_CAP) {
+                    let hash = hashes[(start + i) % hashes.len()];
+                    match por_store.get_chunk(&hash) {
+                        Ok(Some(data)) => {
+                            use sha2::Digest;
+                            let actual: [u8; 32] = sha2::Sha256::digest(&data).into();
+                            if actual == hash.0 {
+                                ok += 1;
+                            } else {
+                                fail += 1;
+                            }
+                        }
+                        _ => fail += 1,
+                    }
+                }
+                por_net.metrics.por_ok.fetch_add(ok, std::sync::atomic::Ordering::Relaxed);
+                por_net.metrics.por_fail.fetch_add(fail, std::sync::atomic::Ordering::Relaxed);
+                crate::log_ev!(
+                    if fail > 0 { "error" } else { "info" },
+                    "por.audit",
+                    "sampled" => hashes.len().min(SAMPLE_CAP),
+                    "ok" => ok,
+                    "fail" => fail
+                );
+            }
+        });
+
         // --- Обработка сигналов завершения ---
         // Корректно завершаем по SIGINT (Ctrl+C) или SIGTERM.
         // H-11: tokio::signal::unix не существует на Windows — там только ctrl_c.
@@ -500,6 +558,9 @@ fn main() {
             _ = epoch_task => {
                 eprintln!("nexxusd: epoch task exited");
             }
+            _ = por_task => {
+                eprintln!("nexxusd: PoR audit task exited");
+            }
             _ = sigint.recv() => {
                 eprintln!("nexxusd: received SIGINT, shutting down");
             }
@@ -517,6 +578,9 @@ fn main() {
             }
             _ = epoch_task => {
                 eprintln!("nexxusd: epoch task exited");
+            }
+            _ = por_task => {
+                eprintln!("nexxusd: PoR audit task exited");
             }
             _ = tokio::signal::ctrl_c() => {
                 eprintln!("nexxusd: received Ctrl+C, shutting down");
