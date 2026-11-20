@@ -80,3 +80,17 @@ jobs:
       - name: cargo clippy (desktop)
         working-directory: nexxus-desktop
         run: cargo clippy --all-targets -- -D warnings
+
+  wasm-gates:
+    name: nexxus-wasm — сборка под wasm32 + тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - name: wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - name: cargo test (host)
+        run: cargo test -p nexxus-wasm
+      - name: cargo build --target wasm32-unknown-unknown --release
+        run: cargo build -p nexxus-wasm --target wasm32-unknown-unknown --release
