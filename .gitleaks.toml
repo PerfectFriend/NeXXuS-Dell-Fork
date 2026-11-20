@@ -1,0 +1,41 @@
+# Gitleaks config для NeXXus-Node — DoD RC1: ни один секрет (токен, сид, PIN) не в git.
+title = "NeXXus-Node secret scan"
+
+[allowlist]
+  description = "Легитимные места, где похожие строки — не секреты"
+  paths = [
+    '''(^|/)docs/''',
+    '''(^|/)\.github/''',
+    '''tests/fixtures/''',
+    '''nexxus-vectors/''',
+  ]
+  regexes = [
+    # Placeholder'ы и примеры в доках/тестах
+    '''(?i)(example|placeholder|dummy|test|changeme|xxx|your[-_]?token|insert[-_]?here)''',
+    # BIP39 тестовые мнемоники (12x "abandon" и т.п.)
+    '''abandon.*about''',
+  ]
+
+[[rules]]
+  id = "telegram-bot-token"
+  description = "Telegram Bot API token"
+  regex = '''(?i)telegram.{0,20}\(?\d{8,10}:[A-Za-z0-9_-]{35}\)?'''
+  tags = ["telegram", "token"]
+
+[[rules]]
+  id = "generic-api-key"
+  description = "Generic API key assignment"
+  regex = '''(?i)(api[_-]?key|secret|token|passwd|password)\s*[:=]\s*["'][A-Za-z0-9_\-]{16,}["']'''
+  tags = ["generic"]
+
+[[rules]]
+  id = "private-key-block"
+  description = "PEM private key"
+  regex = '''-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----'''
+  tags = ["key"]
+
+[[rules]]
+  id = "bip39-mnemonic-leak"
+  description = "12/24 BIP39 слов подряд (не из тестовых fixtures)"
+  regex = '''\b([a-z]{3,10}\s+){11,23}[a-z]{3,10}\b'''
+  tags = ["mnemonic"]

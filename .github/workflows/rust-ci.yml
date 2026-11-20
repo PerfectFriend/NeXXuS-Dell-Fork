@@ -94,3 +94,14 @@ jobs:
         run: cargo test -p nexxus-wasm
       - name: cargo build --target wasm32-unknown-unknown --release
         run: cargo build -p nexxus-wasm --target wasm32-unknown-unknown --release
+
+  secret-scan:
+    name: Secret scan (DoD RC1 — ни один секрет не в git/логах)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        with:
+          config-path: .gitleaks.toml
