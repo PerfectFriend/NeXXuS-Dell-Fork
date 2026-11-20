@@ -207,7 +207,7 @@ Q3+             E6 Ecosystem, formal bits, marketplace only with real settlement
 - [x] E3 property tests: nexxus-econ/tests/props.rs (proptest)
 - [x] E0 hygiene: README→THREAT_MODEL/audits, SECURITY.md/USER_GUIDE закрыты
 - [x] E6 onion-only политики + репликация через Tor (policy action, upload- enforcement, node_replicate_onion); e2e 58/58
-- [x] E6 WASM light-client surface: seal_chunk/open_chunk/sealed_chunk_hash_hex/merkle_proof_flat/merkle_verify_flat в nexxus-wasm; wasm32 release build OK (916KB), host tests 4/4
+- [x] E6 WASM light-client surface: seal_chunk/open_chunk/sealed_chunk_hash_hex/merkle_proof_flat/merkle_verify_flat в nexxus-wasm; wasm32 release build OK (916KB), host tests 4/4, CI job wasm-gates (тесты + wasm32 release build) добавлен 2026-11-20
 - [x] Formal bits: formal_props.rs (nonce binding + vault KDF properties, 2/2 proptest зелёные), воркспейс 206 passed / 0 failed
 - [x] E6 light client self-verify: `light get --key` локально сверяет двухуровневый merkle root (exit 3 при mismatch), `light manifest` + API `node_manifest_get`; живой прогон: OK + bytes identical + bad-key FAIL exit 3
 - [x] E4/W2 artifacts: scripts/windows/{nexxus-service.xml,install-service.ps1,uninstall-service.ps1} (pwsh parser OK), CI release asset nexxusd-windows-x86_64.exe + windows scripts; firewall = P2P port only, API loopback
