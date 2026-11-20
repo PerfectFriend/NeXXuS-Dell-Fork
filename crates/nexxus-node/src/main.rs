@@ -488,7 +488,11 @@ fn main() {
         let por_net = Arc::clone(&net);
         let por_task = tokio::spawn(async move {
             if por_audit_secs == 0 {
-                return;
+                // выключено: паркуемся навсегда, НЕ выходим — выход задачи
+                // завершает весь select! и гасит демон
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                }
             }
             const SAMPLE_CAP: usize = 64;
             loop {
