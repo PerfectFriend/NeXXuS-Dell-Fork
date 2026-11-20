@@ -868,9 +868,11 @@ async function vaultRestore() {
   try {
     const r = await api('node_seed_restore', { pin });
     if (r.status === 'duress') {
-      $('vault-result').textContent = '⚠️ Введён duress-PIN: алерт отправлен, сид НЕ восстановлен.';
-      addStageLog('⚠️ DURESS-PIN в seed.vault — алерт!', 'error');
+      // VLT-03: duress неотличим от обычного результата на экране —
+      // тот же текст, что и при успехе; алерт уходит молча.
       try { await invoke('tg_send_alert_cmd', { text: '⚠️ NeXXus: введён duress-PIN seed.vault — возможное принуждение!' }); } catch (_) {}
+      $('vault-result').textContent = 'Статус: ok';
+      addStageLog('Восстановление seed.vault: ok', 'success');
     } else {
       $('vault-result').textContent = `Статус: ${r.status}${r.node_id ? `, node_id ${r.node_id.slice(0, 16)}…` : ''}`;
       addStageLog(`Восстановление seed.vault: ${r.status}`, r.status === 'wrong_pin' ? 'error' : 'success');

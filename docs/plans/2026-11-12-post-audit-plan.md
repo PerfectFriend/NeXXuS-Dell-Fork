@@ -27,7 +27,7 @@
 | VLT-02 ре-encrypt старых 100k vault до 600k | Info | нет | фаза B (опционально) |
 | VLT-03 duress неотличим от wrong pin в UI | — | проверить UI | фаза A2 |
 | BKP-01 TOCTOU restore vs живой демон | Low | нет лока | exclusive lock (fs2 уже в зависимостях), фаза A1 |
-| BKP-02 backups/ dir 0700 | Info | проверить | фаза A1 |
+| BKP-02 backups/ dir 0700 | Info | ✅ 2026-11-20: mode 0700 на backups/ при создании + тест `backups_dir_is_0700_after_backup` | фаза A1 |
 | DEP-01 cargo audit/deny в CI | Medium (process) | **не было** | фаза A1: локальный прогон + шаг в CI |
 | DEP-02 два rand (0.8+0.10) | Info | есть | фаза B: гармонизация |
 | DEP-03 секреты в истории git | High (operational) | **действие владельца** | ротация + filter-repo/squash до раздачи; не код |
