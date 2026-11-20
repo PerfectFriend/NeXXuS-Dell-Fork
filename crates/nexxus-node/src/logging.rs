@@ -84,6 +84,9 @@ pub fn event(lvl: &str, ev: &str, mut fields: Value) {
 
 #[macro_export]
 macro_rules! log_ev {
+    ($lvl:expr, $ev:expr $(,)?) => {
+        $crate::logging::event($lvl, $ev, serde_json::json!({}))
+    };
     ($lvl:expr, $ev:expr, $($k:expr => $v:expr),* $(,)?) => {
         $crate::logging::event($lvl, $ev, serde_json::json!({ $($k: $v),* }))
     };
