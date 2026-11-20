@@ -37,9 +37,9 @@
 ### Фаза E0 — «Release hygiene» (1–2 недели)
 *Цель: RC1 можно спокойно отдавать людям.*
 
-- [x] Тег релиза ведётся со squash-mirror-артефакта (v2.0.0-prototype на origin; squash-mirror — канонический канал раздачи, DEP-03)
+- [x] Тег `v0.1.0-rc1` на origin + GitHub Release **только со squash-артефакта** (`NeXXus-Node-v0.1.0-rc1-squash.tar.gz`, 1 коммит, sha256 76f5577e…, secret-scan 0, redb 0) — 2026-11-20, HEAD 37ed222
 - [x] `SECURITY.md` (включая self-update ноты Re-Audit #4) + USER_GUIDE с границами «что умеет / чего нет»
-- [x] Метрики в проде: peers (nexxus_peers_connected/known), handshake timeouts, RSS (nexxus_process_rss_bytes), backup ok/fail, uptime — token-gated GET /metrics
+- [x] Метрики в проде: node_metrics (peers, handshake timeouts, prom) + **uptime_secs и rss_kb** добавлены 2026-11-20 (HEAD 37ed222); /metrics token-gated
 - [x] Bind-адрес: `NEXXUS_LISTEN` (дефолт `127.0.0.1:4001`), задокументирован в USER_GUIDE
 - [x] README ссылается на docs/THREAT_MODEL.md и docs/audits/ (re-audit #1–#4)
 
