@@ -194,8 +194,8 @@ jobs:
       - name: ✅ Smoke — AppImage распаковывается, nexxusd на месте
         run: |
           set -x
-          chmod +x dist/*.AppImage
-          ./dist/*.AppImage --appimage-extract >/dev/null
+          chmod +x dist/NeXXus-*.AppImage
+          ./dist/NeXXus-*.AppImage --appimage-extract >/dev/null
           ls -la squashfs-root/usr/bin/
           test -x squashfs-root/usr/bin/nexxusd
           test -x squashfs-root/usr/bin/nexxus-desktop
