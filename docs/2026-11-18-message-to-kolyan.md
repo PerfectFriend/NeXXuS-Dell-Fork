@@ -41,3 +41,20 @@ nexxus-desktop: cargo clippy --bins --all-targets -- -D warnings  # 0
    На существующих сторах phase 2 (затирание plaintext из meta) произойдёт на первом
    старте с `NEXXUS_SEED_PIN` или systemd-credential `seed.pin`.
 3. Проверь, что письмо аудитору со ссылкой на `git clone` заменено на squash-артефакт (S3).
+
+---
+
+## Дополнение 2026-11-18 (ответ на «Проверка новой версии», HEAD `fa73651`)
+
+| Пункт | Статус |
+|---|---|
+| C-3 (keystream reuse) | ✅ исправлено по твоей схеме: seal всего чанка со случайным nonce ДО RS (`ChunkAead::seal` теперь random nonce; `upload_file`/CLI — seal-then-RS). Тест `shards_of_one_chunk_do_not_share_keystream` из чек-листа добавлен и зелёный. e2e 58/58 на новой схеме. |
+| C-4 (быстрый хеш PIN) | ✅ `pin_hash_hex`/`duress_hash_hex` теперь PBKDF2-HMAC-SHA256 с теми же rounds, что KDF (поле `pin_hash_algo: "pbkdf2-sha256-N"`); legacy SHA-256 остался только для чтения старых SDK-vault. Argon2id — крейт недоступен офлайн (crates.io 403), PBKDF2-600k как interim; noted. |
+| C-5 (мнемоника в логе) | ✅ больше не печатается: пишется один раз в `identity.mnemonic` (0600) рядом со стором; лог демона (desktop spawn) открывается с mode 0600. Проверено: в логе первого запуска слов мнемоники нет. |
+| S4 под systemd | ✅ `LoadCredential=seed.pin:` в сгенерированном юните, если есть `NEXXUS_SEED_PIN_FILE` или `/etc/nexxus-node/seed.pin`. |
+| H-11 (Windows) | ✅ `tokio::signal::unix` и `OpenOptionsExt` под `cfg(unix)`; select! — два cfg-блока; `rlimit` перенесён в `[target.'cfg(unix)'.dependencies]`. Локально windows-target не ставится — проверка за CI job `windows`. |
+| H-12 | ✅ корень подтверждён: `release` needs включал `windows`, а windows-job падал на unix-only API (см. H-11) — теперь чинится сверху. Лог job `windows` подтвердит. |
+| doctor (п.3 чек-листа) | ✅ больше не создаёт стор: `open_existing` (проверено — 0 файлов в чистом HOME). |
+| strings store.redb после phase 2 | ✅ на свежем сторе с PIN: 0 хитов по слову мнемоники. Оговорка: redb copy-on-write — в СТАРЫХ сторах/бэкапах страницы с plaintext могут физически оставаться до compaction; это записано в ADR-0010. |
+
+Остались открытыми из твоего порядка: H-3, H-4, H-8 (сеть/API), H-20–H-22 (legacy-TS демон/инсталляторы — кандидаты в docs/archive или жёсткая фиксация), M-1/M-8/M-9. Следующий заход по ним.
