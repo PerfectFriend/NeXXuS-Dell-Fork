@@ -125,7 +125,7 @@
 
 ## Phase H — Мессенджер (SMP) как продукт
 
-### Task H1: Inbox и контакты — ✅ DONE (ядро: `node_smp_send` WS API + SMP inbox UI; QR-обмен контактами — отдельно)
+### Task H1: Inbox и контакты — ✅ DONE (ядро: `node_smp_send` WS API + SMP inbox UI; QR-обмен контактами — ✅ DONE 2026-11-20: SMP-панель, payload `nexxus:<node_id hex>`, рендер QR через `qrcode` + добавление контакта из текста (`b018bad`))
  - API: `smp_inbox` (pending envelopes из SmpRelay), `smp_send`; UI: список контактов (node_id + label), QR-обмен контактами (спецификация §7: `nexxus://add/<node_id>?sig=...`), отправка envelope, TTL-индикатор, read receipts. Commit `feat: SMP inbox UI + QR contact exchange`.
 
 ---
