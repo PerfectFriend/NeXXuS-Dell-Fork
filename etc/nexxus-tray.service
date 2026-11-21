@@ -1,0 +1,33 @@
+[Unit]
+Description=NeXXus Tray — иконка в системном трее для хранителя ноды
+Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+PartOf=graphical-session.target
+After=graphical-session.target
+# Трей — приложение пользовательской сессии: запускается от пользователя
+# и только когда есть графическая сессия.
+ConditionEnvironment=DISPLAY
+
+[Service]
+Type=simple
+# Юнит ставится как USER-юнит (systemctl --user), поэтому User=/Group= here
+# запрещены: systemd трактует их как ошибку 216/GROUP. Пользователь и так
+# берётся из сессии, запустившей юнит.
+#
+# SupplementaryGroups= ТОЖЕ нельзя: user-менеджер не имеет прав менять
+# список групп ("Changing group credentials failed: Operation not permitted",
+# status=216/GROUP). Вместо этого доступ трея к каталогу данных ноды
+# выдан через POSIX ACL (u:master:rwx), а не через членство в группе.
+WorkingDirectory=/opt/nexxus
+Environment=QT_QPA_PLATFORM=xcb
+Environment=NEXXUS_HOST=127.0.0.1
+Environment=NEXXUS_PORT=3999
+Environment=NEXXUS_DATA_DIR=/var/lib/nexxus
+Environment=NEXXUS_BIN=/usr/local/bin/nexxusd
+Environment=NEXXUS_UNIT=nexxus-node.service
+Environment=NEXXUS_TRAY_REFRESH_MS=5000
+ExecStart=/usr/bin/python3 /opt/nexxus/scripts/nexxus-tray.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

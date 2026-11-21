@@ -1,0 +1,37 @@
+[Unit]
+Description=NeXXUs Sovereign Decentralized Storage Node Daemon
+Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# Нода пишет в /var/lib/nexxus от root, но с группой nexxus — чтобы трей
+# (пользователь master в группе nexxus) мог читать состояние и писать
+# служебные файлы (пауза хранителя, тест-файл), не выдавая ноде лишних прав.
+Group=nexxus
+WorkingDirectory=/opt/nexxus
+Environment=NODE_ENV=production
+EnvironmentFile=-/etc/nexxus/nexxus.conf
+Environment=NEXXUS_DATA_DIR=/var/lib/nexxus
+Environment=NEXXUS_STORAGE_GB=16
+Environment=NEXXUS_PORT=3999
+Environment=NEXXUS_HOST=0.0.0.0
+ExecStart=/usr/local/bin/nexxusd serve --port=3999 --data-dir=/var/lib/nexxus --storage-gb=16
+Restart=always
+RestartSec=5s
+LimitNOFILE=1048576
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexxus-node
+
+# Security Sandboxing
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/nexxus
+
+[Install]
+WantedBy=multi-user.target

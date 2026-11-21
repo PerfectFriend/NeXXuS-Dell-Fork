@@ -1,0 +1,51 @@
+[Unit]
+Description=NeXXus Guardian — хранитель ноды (следит за здоровьем, перезапускает)
+Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+After=network-online.target
+Wants=network-online.target
+# Хранитель стартует ПЕРВЫМ и сам тянет ноду за собой:
+# нода не поднимется, пока guardian не отработал (Before=).
+#
+# Именно Wants, а не Requires: при Requires остановка ноды вручную
+# останавливала бы и хранителя — а он как раз должен ноду вернуть.
+Before=nexxus-node.service
+Wants=nexxus-node.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/nexxus
+Environment=NODE_ENV=production
+EnvironmentFile=-/etc/nexxus/nexxus.conf
+Environment=NEXXUS_UNIT=nexxus-node.service
+Environment=NEXXUS_BIN=/usr/local/bin/nexxusd
+Environment=NEXXUS_DATA_DIR=/var/lib/nexxus
+Environment=NEXXUS_PORT=3999
+# Проверяем здоровье по loopback, а не по NEXXUS_HOST из конфига:
+# EnvironmentFile в systemd читается ПОСЛЕ Environment=, поэтому значение
+# из /etc/nexxus/nexxus.conf (0.0.0.0) перебило бы 127.0.0.1 ниже.
+Environment=NEXXUS_HEALTH_URL=http://127.0.0.1:3999/api/status
+Environment=NEXXUS_CHECK_INTERVAL=15
+Environment=NEXXUS_HEALTH_TIMEOUT=10
+Environment=NEXXUS_MAX_FAILURES=3
+Environment=NEXXUS_RESTART_COOLDOWN=60
+Environment=NEXXUS_RECOVER_TIMEOUT=90
+ExecStart=/opt/nexxus/scripts/nexxus-guardian.sh
+Restart=always
+RestartSec=10
+# Хранитель перезапускает ноду через systemctl — ему нужен доступ к
+# systemd-шине, но не нужен полный root доступ к файловой системе.
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexxus-guardian
+
+# Sandbox: пишем только в каталог данных ноды.
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/nexxus
+
+[Install]
+WantedBy=multi-user.target
