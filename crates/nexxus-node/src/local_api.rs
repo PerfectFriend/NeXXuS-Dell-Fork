@@ -470,6 +470,8 @@ impl LocalApi {
             "node_import_bundle" => self.handle_node_import_bundle(req.params).await,
             "node_smp" => self.handle_node_smp().await,
             "node_smp_send" => self.handle_node_smp_send(req.params).await,
+            "node_contact_link" => self.handle_node_contact_link(req.params).await,
+            "node_contact_parse" => self.handle_node_contact_parse(req.params),
             "node_epoch" => self.handle_node_epoch().await,
             "node_tor" => self.handle_node_tor().await,
             "send_smp_envelope" => self.handle_send_smp_envelope(req.params).await,
@@ -1554,6 +1556,52 @@ impl LocalApi {
         }
     }
 
+    /// Specification §7: Generate standard `nexxus://contact?...` URI for this node.
+    async fn handle_node_contact_link(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let name = params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("NeXXus Node");
+        let node_id_hex = hex::encode(self.network.node_id().0);
+        let pubkey_bytes = self.network.identity_pubkey();
+        use sha2::Digest;
+        let fp = hex::encode(sha2::Sha256::digest(pubkey_bytes));
+        let onion = self
+            .tor_status
+            .lock()
+            .await
+            .onion_address
+            .clone()
+            .unwrap_or_else(|| format!("{}.onion", &node_id_hex[..16]));
+
+        let link = nexxus_core::smp::ContactLink::new(&node_id_hex, &onion, name, &fp);
+        Ok(serde_json::json!({
+            "uri": link.to_uri(),
+            "addr": link.addr,
+            "onion": link.onion,
+            "name": link.name,
+            "fingerprint": link.fingerprint,
+        }))
+    }
+
+    /// Specification §7: Parse and validate `nexxus://contact?...` URI.
+    fn handle_node_contact_parse(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let uri = params
+            .as_ref()
+            .and_then(|p| p.get("uri"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NexxusError::Io("param 'uri' required".into()))?;
+        let link = nexxus_core::smp::ContactLink::from_uri(uri)?;
+        Ok(serde_json::json!({
+            "addr": link.addr,
+            "onion": link.onion,
+            "name": link.name,
+            "fingerprint": link.fingerprint,
+            "ok": true,
+        }))
+    }
+
     async fn handle_node_epoch(&self) -> Result<Value, NexxusError> {
         let info = self.epoch_info.lock().await.clone();
         serde_json::to_value(info).map_err(|e| NexxusError::Io(e.to_string()))
@@ -2063,5 +2111,15 @@ mod tests {
         // ping по-прежнему работает — для health-check монитора.
         let r = auth_gate(None, &req("ping", None), &mut auth).unwrap();
         assert_eq!(resp_code(&r.0), 0);
+    }
+
+    #[test]
+    fn contact_link_generation_and_parsing_roundtrip() {
+        // Specification §7: Contact exchange standard test
+        let uri = "nexxus://contact?addr=0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20&onion=25njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkenjpzad.onion&name=TestNode&fp=1234567890abcdef";
+        let parsed = nexxus_core::smp::ContactLink::from_uri(uri).unwrap();
+        assert_eq!(parsed.name, "TestNode");
+        assert_eq!(parsed.onion, "25njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkenjpzad.onion");
+        assert_eq!(parsed.to_uri(), uri);
     }
 }

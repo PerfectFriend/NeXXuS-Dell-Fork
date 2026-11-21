@@ -113,6 +113,129 @@ impl SmpRelay {
     }
 }
 
+/// Specification §7: Contact exchange standard for QR codes and deep links.
+/// Format: `nexxus://contact?addr=<Bech32Address>&onion=<Torv3OnionAddress>&name=<ContactAlias>&fp=<PublicKeyFingerprint>`
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContactLink {
+    pub addr: String,
+    pub onion: String,
+    pub name: String,
+    pub fingerprint: String,
+}
+
+impl ContactLink {
+    pub fn new(
+        addr: impl Into<String>,
+        onion: impl Into<String>,
+        name: impl Into<String>,
+        fingerprint: impl Into<String>,
+    ) -> Self {
+        Self {
+            addr: addr.into(),
+            onion: onion.into(),
+            name: name.into(),
+            fingerprint: fingerprint.into(),
+        }
+    }
+
+    /// Serializes contact link to canonical `nexxus://contact?...` URI.
+    pub fn to_uri(&self) -> String {
+        format!(
+            "nexxus://contact?addr={}&onion={}&name={}&fp={}",
+            url_encode(&self.addr),
+            url_encode(&self.onion),
+            url_encode(&self.name),
+            url_encode(&self.fingerprint),
+        )
+    }
+
+    /// Parses deep link URI from standard or legacy format.
+    pub fn from_uri(uri: &str) -> Result<Self, NexxusError> {
+        let query = if let Some(q) = uri.strip_prefix("nexxus://contact?") {
+            q
+        } else if let Some(q) = uri.strip_prefix("nexxus://add/") {
+            q
+        } else {
+            return Err(NexxusError::Io(
+                "invalid URI scheme: expected nexxus://contact?...".into(),
+            ));
+        };
+
+        let mut addr = None;
+        let mut onion = None;
+        let mut name = None;
+        let mut fp = None;
+
+        for pair in query.split('&') {
+            if let Some((k, v)) = pair.split_once('=') {
+                match k {
+                    "addr" => addr = Some(url_decode(v)),
+                    "onion" => onion = Some(url_decode(v)),
+                    "name" => name = Some(url_decode(v)),
+                    "fp" | "fingerprint" => fp = Some(url_decode(v)),
+                    _ => {}
+                }
+            }
+        }
+
+        let addr = addr.ok_or_else(|| NexxusError::Io("missing 'addr' in contact link".into()))?;
+        let onion = onion.ok_or_else(|| NexxusError::Io("missing 'onion' in contact link".into()))?;
+        let name = name.unwrap_or_else(|| "Anonymous".into());
+        let fingerprint = fp.unwrap_or_default();
+
+        if !onion.ends_with(".onion") {
+            return Err(NexxusError::Io(
+                "invalid onion address in contact link (must end with .onion)".into(),
+            ));
+        }
+
+        Ok(Self {
+            addr,
+            onion,
+            name,
+            fingerprint,
+        })
+    }
+}
+
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            b' ' => out.push('+'),
+            _ => {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    out
+}
+
+fn url_decode(s: &str) -> String {
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut chars = s.bytes();
+    while let Some(b) = chars.next() {
+        match b {
+            b'+' => bytes.push(b' '),
+            b'%' => {
+                let h1 = chars.next().unwrap_or(b'0') as char;
+                let h2 = chars.next().unwrap_or(b'0') as char;
+                let hex_str = format!("{h1}{h2}");
+                if let Ok(val) = u8::from_str_radix(&hex_str, 16) {
+                    bytes.push(val);
+                } else {
+                    bytes.push(b'%');
+                }
+            }
+            _ => bytes.push(b),
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +323,30 @@ mod tests {
         };
         let dec = NodeAnnounce::decode(&announce.encode()).unwrap();
         assert_eq!(dec, announce);
+    }
+
+    #[test]
+    fn contact_link_roundtrip_and_uri_validation() {
+        // Specification §7: URI standard test
+        let link = ContactLink::new(
+            "nx1q9f7x4a2e8w3u1s0d6c8b5m2k4p7z9l3j5h",
+            "25njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkenjpzad.onion",
+            "Alice Node",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        );
+
+        let uri = link.to_uri();
+        assert!(uri.starts_with("nexxus://contact?"));
+        assert!(uri.contains("addr=nx1q"));
+        assert!(uri.contains("onion=25njqamc"));
+
+        let parsed = ContactLink::from_uri(&uri).unwrap();
+        assert_eq!(parsed, link);
+
+        // Invalid scheme rejection
+        assert!(ContactLink::from_uri("https://example.com").is_err());
+
+        // Invalid onion address rejection
+        assert!(ContactLink::from_uri("nexxus://contact?addr=abc&onion=not-onion&name=Bob").is_err());
     }
 }
