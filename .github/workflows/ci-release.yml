@@ -274,6 +274,27 @@ jobs:
           name: nexxusd-windows
           path: target/x86_64-pc-windows-gnu/release/nexxusd.exe
 
+      - name: 📦 Package Windows zip (exe + service scripts + README)
+        run: |
+          mkdir -p dist/windows/bin dist/windows/service
+          cp target/x86_64-pc-windows-gnu/release/nexxusd.exe dist/windows/bin/
+          cp scripts/windows/install-service.ps1 scripts/windows/uninstall-service.ps1 dist/windows/service/
+          cp scripts/windows/nexxus-service.xml dist/windows/service/
+          printf '%s\n' \
+            'NeXXus Node - Windows x64' \
+            '1. bin\nexxusd.exe - демон ноды (nexxusd.exe --help).' \
+            '2. Служба: service\install-service.ps1 от администратора; удаление: service\uninstall-service.ps1.' \
+            '3. API слушает только 127.0.0.1:4010, токен в ~/.nexxus/api.token (или NEXXUS_API_TOKEN).' \
+            > dist/windows/README.txt
+          cd dist/windows && zip -r ../nexxus-windows-x86_64.zip . && cd ../..
+          ls -la dist/*.zip
+
+      - name: Upload Windows zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexxus-windows-zip
+          path: dist/nexxus-windows-x86_64.zip
+
   tor-integration:
     name: Tor integration (opt-in, real onion publish)
     runs-on: ubuntu-latest
@@ -344,6 +365,12 @@ jobs:
           name: nexxusd-windows
           path: dist
 
+      - name: 📥 Download Windows zip artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nexxus-windows-zip
+          path: dist
+
       - name: 🏷️ Rename Windows asset + stage service scripts
         run: |
           mv dist/nexxusd.exe dist/nexxusd-windows-x86_64.exe
@@ -361,6 +388,7 @@ jobs:
             dist/*.AppImage
             dist/app-debug.apk
             dist/nexxusd-windows-x86_64.exe
+            dist/nexxus-windows-x86_64.zip
             dist/windows/install-service.ps1
             dist/windows/uninstall-service.ps1
             dist/windows/nexxus-service.xml
