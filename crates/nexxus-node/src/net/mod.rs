@@ -4,6 +4,7 @@
 
 pub mod frame;
 pub mod network;
+pub mod ratelimit;
 pub mod routing;
 
 pub use network::P2pNetwork;

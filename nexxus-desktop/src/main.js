@@ -1174,11 +1174,12 @@ async function runApi(method, inputs, btn) {
     // E2: penalty/warning-подсветка — por_fail и req_timeouts видны сразу
     const m = r && r.metrics;
     let warn = '';
-    if (m && (m.por_fail > 0 || m.req_timeouts > 0 || m.handshake_timeouts > 0)) {
+    if (m && (m.por_fail > 0 || m.req_timeouts > 0 || m.handshake_timeouts > 0 || (m.rl_wait_ms > 0))) {
       const parts = [];
       if (m.por_fail > 0) parts.push(`PoR fail: ${m.por_fail}`);
       if (m.req_timeouts > 0) parts.push(`таймауты запросов: ${m.req_timeouts}`);
       if (m.handshake_timeouts > 0) parts.push(`таймауты рукопожатий: ${m.handshake_timeouts}`);
+      if (m.rl_wait_ms > 0) parts.push(`дроссель bandwidth: ${m.rl_wait_ms} мс`);
       warn = `\n\n⚠️ ${parts.join(' · ')}`;
     }
     out.textContent = `✅ ${method} ${JSON.stringify(shown)}\n\n` + JSON.stringify(r, null, 2) + warn;

@@ -15,14 +15,19 @@ const LEN_LEN: usize = 4;
 /// Send a payload as a v3 frame. `signature` is the Ed25519 signature over
 /// `v3_signing_bytes(opcode, request_id, payload, session_nonce)`; computed
 /// by the caller (see `P2pNetwork::send_signed_frame`).
-pub async fn send_frame<T: Payload, S: AsyncRead + AsyncWrite + Unpin + Send>(
+/// F1: like `send_frame`, but charges the up-link token bucket before writing.
+pub async fn send_frame_rl<T: Payload, S: AsyncRead + AsyncWrite + Unpin + Send>(
     stream: &mut S,
     opcode: Opcode,
     request_id: u32,
     payload: &T,
     signature: &[u8; 64],
+    rl: &crate::net::ratelimit::RateLimit,
 ) -> Result<(), NexxusError> {
     let frame = encode_v3(opcode, request_id, &payload.encode(), signature);
+    if let Some(b) = &rl.up {
+        b.wait(frame.len() + LEN_LEN).await;
+    }
     let mut len_buf = [0u8; LEN_LEN];
     len_buf.copy_from_slice(&(frame.len() as u32).to_be_bytes());
     stream
@@ -37,8 +42,11 @@ pub async fn send_frame<T: Payload, S: AsyncRead + AsyncWrite + Unpin + Send>(
 }
 
 /// Receive one v3 frame. Returns (opcode, request_id, payload_bytes, signature).
-pub async fn recv_frame<S: AsyncRead + AsyncWrite + Unpin + Send>(
+/// F1: like `recv_frame`, but charges the down-link bucket once the frame
+/// length is known (before allocating/reading the body).
+pub async fn recv_frame_rl<S: AsyncRead + AsyncWrite + Unpin + Send>(
     stream: &mut S,
+    rl: &crate::net::ratelimit::RateLimit,
 ) -> Result<(Opcode, u32, Vec<u8>, [u8; 64]), NexxusError> {
     let mut len_buf = [0u8; LEN_LEN];
     stream
@@ -51,6 +59,9 @@ pub async fn recv_frame<S: AsyncRead + AsyncWrite + Unpin + Send>(
         return Err(NexxusError::Io(format!(
             "frame too large: {len} > {MAX_FRAME_LEN}"
         )));
+    }
+    if let Some(b) = &rl.down {
+        b.wait(len).await;
     }
     let mut frame = vec![0u8; len];
     stream
@@ -77,19 +88,19 @@ mod tests {
 
         let handle = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let (op, rid, payload, sig) = recv_frame(&mut stream).await.unwrap();
+            let (op, rid, payload, sig) = recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
             assert_eq!(op, Opcode::Ping);
             assert_eq!(rid, 0xdeadbeef);
             assert_eq!(sig, [0x42u8; 64]);
             let decoded = Ping::decode(&payload).unwrap();
             let _ = decoded;
             let pong = Pong;
-            send_frame(&mut stream, Opcode::Pong, rid, &pong, &[0u8; 64]).await.unwrap();
+            send_frame_rl(&mut stream, Opcode::Pong, rid, &pong, &[0u8; 64], &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         });
 
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        send_frame(&mut stream, Opcode::Ping, 0xdeadbeef, &Ping, &[0x42u8; 64]).await.unwrap();
-        let (op, rid, payload, _sig) = recv_frame(&mut stream).await.unwrap();
+        send_frame_rl(&mut stream, Opcode::Ping, 0xdeadbeef, &Ping, &[0x42u8; 64], &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
+        let (op, rid, payload, _sig) = recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::Pong);
         assert_eq!(rid, 0xdeadbeef);
         let _ = Pong::decode(&payload).unwrap();
@@ -104,7 +115,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let handle = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let err = recv_frame(&mut stream).await.unwrap_err();
+            let err = recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap_err();
             assert!(err.to_string().contains("frame too large"), "got: {err}");
         });
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();

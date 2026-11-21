@@ -889,7 +889,7 @@ impl LocalApi {
 
     /// E1: node-level P2P counters (JSON + Prometheus text in `prom`).
     fn handle_node_metrics(&self) -> Result<Value, NexxusError> {
-        let m = self.network.metrics.snapshot();
+        let m = self.network.snapshot_with_rl();
         let mut v = serde_json::json!({ "metrics": m, "peers_scored": self.network.peer_scores_snapshot().len() });
         v["prom"] = Value::String(self.network.metrics.prom());
         // E0: prod-observability — uptime и RSS процесса (unix: /proc/self).

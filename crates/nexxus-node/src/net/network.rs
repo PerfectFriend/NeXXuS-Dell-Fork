@@ -31,7 +31,7 @@ use nexxus_core::{
         StoreChunkAck,
     },
 };
-use crate::net::frame::{MAX_FRAME_LEN, send_frame};
+use crate::net::frame::{MAX_FRAME_LEN, send_frame_rl};
 use crate::storage::ChunkStore;
 #[cfg(test)]
 use rand::Rng;
@@ -112,6 +112,8 @@ pub struct P2pNetwork {
     pub metrics: Arc<Metrics>,
     /// E1: soft peer scores keyed by socket address (informational only).
     peer_scores: Arc<std::sync::Mutex<HashMap<SocketAddr, PeerScore>>>,
+    /// F1: bandwidth caps (token bucket) applied to all P2P frames.
+    pub rate_limit: std::sync::RwLock<crate::net::ratelimit::RateLimit>,
 }
 
 /// Per-IP connection bucket: active connections + timestamps of recent accepts.
@@ -145,6 +147,8 @@ pub struct Metrics {
     pub peers_evicted: AtomicU64,
     /// E1 loss-индикатор: клиентские запросы (ping/fetch/por), истёкшие по таймауту.
     pub req_timeouts: AtomicU64,
+    /// F1: суммарное время, проведённое в дросселе bandwidth cap (мс).
+    pub rl_wait_ms: AtomicU64,
 }
 
 impl Metrics {
@@ -169,6 +173,7 @@ impl Metrics {
             "backup_fail": self.backup_fail.load(Ordering::Relaxed),
             "peers_evicted": self.peers_evicted.load(Ordering::Relaxed),
             "req_timeouts": self.req_timeouts.load(Ordering::Relaxed),
+            "rl_wait_ms": self.rl_wait_ms.load(Ordering::Relaxed),
         })
     }
 
@@ -283,6 +288,7 @@ impl P2pNetwork {
             max_peers: std::sync::atomic::AtomicUsize::new(MAX_PEERS),
             metrics: Arc::new(Metrics::default()),
             peer_scores: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            rate_limit: std::sync::RwLock::new(crate::net::ratelimit::RateLimit::NONE),
         }
     }
 
@@ -327,7 +333,31 @@ impl P2pNetwork {
             max_peers: std::sync::atomic::AtomicUsize::new(MAX_PEERS),
             metrics: Arc::new(Metrics::default()),
             peer_scores: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            rate_limit: std::sync::RwLock::new(crate::net::ratelimit::RateLimit::from_config()),
         }
+    }
+
+    /// F1: override bandwidth caps after construction (tests / dynamic config).
+    #[cfg(test)]
+    pub fn set_rate_limit(&self, up_kbps: u64, down_kbps: u64) {
+        *self.rate_limit.write().unwrap() = crate::net::ratelimit::RateLimit::new(up_kbps, down_kbps);
+    }
+
+    /// Cheap clone of the current caps (two Arcs) for use across .await.
+    fn rl(&self) -> crate::net::ratelimit::RateLimit {
+        self.rate_limit.read().unwrap().clone()
+    }
+
+    /// Metrics snapshot plus F1 bandwidth-throttle counters from the token buckets.
+    pub fn snapshot_with_rl(&self) -> serde_json::Value {
+        let mut v = self.metrics.snapshot();
+        use std::sync::atomic::Ordering;
+        let rl = self.rate_limit.read().unwrap();
+        let up = rl.up.as_ref().map(|b| b.waited_ms.load(Ordering::Relaxed)).unwrap_or(0);
+        let down = rl.down.as_ref().map(|b| b.waited_ms.load(Ordering::Relaxed)).unwrap_or(0);
+        drop(rl);
+        v["rl_wait_ms"] = serde_json::json!(up + down);
+        v
     }
 
     /// Attach the local API instance for peer registration and monitoring.
@@ -387,7 +417,7 @@ impl P2pNetwork {
         let signature = self.sign_v3(nonce, opcode, request_id, &encoded);
         self.metrics.frames_out.fetch_add(1, Ordering::Relaxed);
         self.metrics.bytes_out.fetch_add(encoded.len() as u64, Ordering::Relaxed);
-        send_frame(stream, opcode, request_id, payload, &signature).await
+        send_frame_rl(stream, opcode, request_id, payload, &signature, &self.rl()).await
     }
 
     /// Pause/resume inbound frame processing (local API node_pause/node_resume).
@@ -501,7 +531,7 @@ impl P2pNetwork {
         let our = self.our_announce(our_nonce);
         self.send_signed_frame(stream, &our_nonce, Opcode::NodeAnnounce, req_id, &our)
             .await?;
-        let (op, rid, payload, sig) = crate::net::frame::recv_frame(stream).await?;
+        let (op, rid, payload, sig) = crate::net::frame::recv_frame_rl(stream, &self.rl()).await?;
         if op != Opcode::NodeAnnounce || rid != req_id {
             return Err(NexxusError::Io(format!(
                 "expected NodeAnnounce reply, got opcode 0x{:02x} rid={rid:#x}",
@@ -533,7 +563,7 @@ impl P2pNetwork {
         stream: &mut S,
         hs: &Handshake,
     ) -> Result<(Opcode, u32, Vec<u8>), NexxusError> {
-        let (opcode, req_id, payload, sig) = crate::net::frame::recv_frame(stream).await?;
+        let (opcode, req_id, payload, sig) = crate::net::frame::recv_frame_rl(stream, &self.rl()).await?;
         let msg = v3_signing_bytes(opcode, req_id, &payload, &hs.peer_nonce);
         if !Identity::verify(&hs.peer_key, &msg, &sig) {
             return Err(NexxusError::Io("bad frame signature".into()));
@@ -851,7 +881,7 @@ impl P2pNetwork {
             loop {
                 let frame_res = if first {
                     first = false;
-                    let r = tokio::time::timeout(HANDSHAKE_TIMEOUT, crate::net::frame::recv_frame(&mut stream)).await;
+                    let r = tokio::time::timeout(HANDSHAKE_TIMEOUT, crate::net::frame::recv_frame_rl(&mut stream, &self.rl())).await;
                     if r.is_err() {
                         self.metrics.handshake_timeouts.fetch_add(1, Ordering::Relaxed);
                         crate::log_ev!("warn", "handshake.timeout", "addr" => addr.to_string());
@@ -860,7 +890,7 @@ impl P2pNetwork {
                 } else {
                     // NET-03: idle timeout — an established connection that
                     // sends nothing for IDLE_TIMEOUT is dropped.
-                    let r = tokio::time::timeout(IDLE_TIMEOUT, crate::net::frame::recv_frame(&mut stream)).await;
+                    let r = tokio::time::timeout(IDLE_TIMEOUT, crate::net::frame::recv_frame_rl(&mut stream, &self.rl())).await;
                     if r.is_err() {
                         self.metrics.idle_timeouts.fetch_add(1, Ordering::Relaxed);
                     }
@@ -1450,13 +1480,13 @@ mod tests {
             data: data.clone(),
         };
         net.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::StoreChunk, 0x0001, &chunk).await.unwrap();
-        let (op, rid, _payload, _sig) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op, rid, _payload, _sig) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::StoreChunkAck);
         assert_eq!(rid, 0x0001);
 
         let fetch = FetchChunk { hash: hash.0 };
         net.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::FetchChunk, 0x0002, &fetch).await.unwrap();
-        let (op2, rid2, payload2, _sig2) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op2, rid2, payload2, _sig2) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op2, Opcode::FetchChunkResp);
         assert_eq!(rid2, 0x0002);
         let resp = FetchChunkResp::decode(&payload2).unwrap();
@@ -1465,7 +1495,7 @@ mod tests {
         // E1: a second fetch of a missing hash records hit+miss and peer score.
         let miss = FetchChunk { hash: [0xEEu8; 32] };
         net.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::FetchChunk, 0x0003, &miss).await.unwrap();
-        let (op3, _, _, _) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op3, _, _, _) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op3, Opcode::ErrorResponse);
         // let the server task process the frames before asserting counters
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1615,7 +1645,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let (op, _rid, payload, _sig) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op, _rid, payload, _sig) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::PorResponse);
         let resp = PorResponse::decode(&payload).unwrap();
         assert_eq!(resp.chunk_hash, hash);
@@ -1714,7 +1744,7 @@ mod tests {
         net.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::EpochFinalize, 0x0008, &finalize)
             .await
             .unwrap();
-        let (op, _rid, _payload, _sig) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op, _rid, _payload, _sig) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::Pong); // valid multi-sig -> Pong
 
         server.abort();
@@ -1766,7 +1796,7 @@ mod tests {
         net.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::EpochFinalize, 0x0008, &finalize)
             .await
             .unwrap();
-        let (op, _rid, _payload, _sig) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op, _rid, _payload, _sig) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::ErrorResponse); // no committee -> denied
 
         server.abort();
@@ -1938,7 +1968,7 @@ mod tests {
         net.send_signed_frame(&mut stream, &[0u8; 32], Opcode::Ping, 0x0001, &nexxus_core::wire::payloads::Ping)
             .await
             .unwrap();
-        let (op, _rid, payload, _sig) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op, _rid, payload, _sig) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::ErrorResponse);
         let err = ErrorResponse::decode(&payload).unwrap();
         assert_eq!(err.code, 0x0006);
@@ -1953,16 +1983,17 @@ mod tests {
         let _hs = net.announce_handshake(&mut stream, 0x0001).await.unwrap();
         // well-formed frame after the announce, but the 64-byte signature is
         // garbage: must be rejected with 0x0008 and never dispatched
-        send_frame(
+        send_frame_rl(
             &mut stream,
             Opcode::Ping,
             0x0002,
             &nexxus_core::wire::payloads::Ping,
             &[0x42u8; 64],
+            &crate::net::ratelimit::RateLimit::NONE,
         )
         .await
         .unwrap();
-        let (op, _rid, payload, _sig) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op, _rid, payload, _sig) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::ErrorResponse);
         let err = ErrorResponse::decode(&payload).unwrap();
         assert_eq!(err.code, 0x0008);
@@ -1977,20 +2008,20 @@ mod tests {
         let ping = nexxus_core::wire::payloads::Ping;
         // normal ping -> pong
         net.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::Ping, 0x0002, &ping).await.unwrap();
-        let (op, _, _, _) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op, _, _, _) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::Pong);
         // pause -> ping rejected with 0x0007
         net.set_paused(true);
         assert!(net.is_paused());
         net.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::Ping, 0x0003, &ping).await.unwrap();
-        let (op, _, payload, _) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op, _, payload, _) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::ErrorResponse);
         assert_eq!(ErrorResponse::decode(&payload).unwrap().code, 0x0007);
         // resume -> pong again
         net.set_paused(false);
         assert!(!net.is_paused());
         net.send_signed_frame(&mut stream, &hs.our_nonce, Opcode::Ping, 0x0004, &ping).await.unwrap();
-        let (op, _, _, _) = crate::net::frame::recv_frame(&mut stream).await.unwrap();
+        let (op, _, _, _) = crate::net::frame::recv_frame_rl(&mut stream, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::Pong);
         server.abort();
     }
@@ -2054,16 +2085,29 @@ mod tests {
         net.send_signed_frame(&mut s2, &hs2.our_nonce, Opcode::Ping, 0x0002, &nexxus_core::wire::payloads::Ping)
             .await
             .unwrap();
-        let (op, _, _, _) = crate::net::frame::recv_frame(&mut s2).await.unwrap();
+        let (op, _, _, _) = crate::net::frame::recv_frame_rl(&mut s2, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::Pong);
 
         // replay: same key, but signed with s1's nonce, sent over s2 -> 0x0008
         net.send_signed_frame(&mut s2, &hs1.our_nonce, Opcode::Ping, 0x0003, &nexxus_core::wire::payloads::Ping)
             .await
             .unwrap();
-        let (op, _, payload, _) = crate::net::frame::recv_frame(&mut s2).await.unwrap();
+        let (op, _, payload, _) = crate::net::frame::recv_frame_rl(&mut s2, &crate::net::ratelimit::RateLimit::NONE).await.unwrap();
         assert_eq!(op, Opcode::ErrorResponse);
         assert_eq!(ErrorResponse::decode(&payload).unwrap().code, 0x0008);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn rate_limit_caps_can_be_set_and_zero_means_unlimited() {
+        // F1: set_rate_limit включает token bucket; 0 = без ограничений.
+        let (net, _addr, server) = spawn_bound(0x73).await;
+        net.set_rate_limit(0, 0);
+        assert!(net.rate_limit.read().unwrap().up.is_none() && net.rate_limit.read().unwrap().down.is_none());
+        let none = crate::net::ratelimit::RateLimit::NONE;
+        assert!(none.up.is_none() && none.down.is_none());
+        net.set_rate_limit(64, 128);
+        assert!(net.rate_limit.read().unwrap().up.is_some() && net.rate_limit.read().unwrap().down.is_some());
         server.abort();
     }
 
@@ -2116,7 +2160,7 @@ mod tests {
         // send nothing; server must close the connection by itself
         let res = tokio::time::timeout(
             std::time::Duration::from_secs(HANDSHAKE_TIMEOUT.as_secs() + 3),
-            crate::net::frame::recv_frame(&mut s),
+            crate::net::frame::recv_frame_rl(&mut s, &crate::net::ratelimit::RateLimit::NONE),
         )
         .await
         .expect("server did not enforce handshake timeout");
