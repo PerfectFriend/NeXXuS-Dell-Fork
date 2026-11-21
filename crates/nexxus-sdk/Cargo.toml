@@ -1,0 +1,23 @@
+[package]
+name = "nexxus-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "High-level Rust SDK for NeXXUs Sovereign Protocol (Node Client, dApp Manifest, Media Streaming)"
+
+[dependencies]
+nexxus-core = { workspace = true }
+nexxus-econ = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+futures-util = "0.3"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.24"
+
+[dev-dependencies]
+tempfile = "3"

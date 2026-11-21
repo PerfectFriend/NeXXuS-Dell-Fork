@@ -5,6 +5,7 @@ members = [
     "crates/nexxus-econ",
     "crates/nexxus-node",
     "crates/nexxus-wasm",
+    "crates/nexxus-sdk",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ unsafe_code = "forbid"
 # internal
 nexxus-core = { path = "crates/nexxus-core" }
 nexxus-econ = { path = "crates/nexxus-econ" }
+nexxus-sdk = { path = "crates/nexxus-sdk" }
 # crypto / encoding
 sha2 = "0.10"
 chacha20poly1305 = "0.10"

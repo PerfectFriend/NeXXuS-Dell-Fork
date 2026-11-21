@@ -59,11 +59,10 @@ pub struct DerivedKey {
 }
 
 impl DerivedKey {
-    pub fn from_seed(seed: &[u8; 64]) -> Result<Self, NexxusError> {
+    /// Derive key using a custom SLIP-0010 derivation path.
+    pub fn derive_custom_path(seed: &[u8; 64], path: &[u32]) -> Result<Self, NexxusError> {
         let (mut key, mut cc) = master_from_seed(seed)?;
-        let mut path = Vec::new();
-        for &index in DERIVATION_PATH {
-            path.push(index);
+        for &index in path {
             let (next, next_cc) = ckd_private(&key, &cc, index)?;
             key = next;
             cc = next_cc;
@@ -71,8 +70,25 @@ impl DerivedKey {
         Ok(DerivedKey {
             private_key: key[..32].try_into().expect("32 bytes"),
             chain_code: cc,
-            path,
+            path: path.to_vec(),
         })
+    }
+
+    pub fn from_seed(seed: &[u8; 64]) -> Result<Self, NexxusError> {
+        Self::derive_custom_path(seed, DERIVATION_PATH)
+    }
+
+    /// Phase 3 dApp isolated key derivation: m / 44' / 999' / app_id' / 0 / 0
+    /// Ensures apps only access their own derived key pair and cannot read the master seed or other apps.
+    pub fn for_dapp(seed: &[u8; 64], app_id: u32) -> Result<Self, NexxusError> {
+        let path = [
+            44 | HARDENED,
+            999 | HARDENED,
+            app_id | HARDENED,
+            0,
+            0,
+        ];
+        Self::derive_custom_path(seed, &path)
     }
 }
 
@@ -98,5 +114,22 @@ mod tests {
         assert!(DERIVATION_PATH[3] & HARDENED == 0);
         assert!(DERIVATION_PATH[4] & HARDENED == 0);
         assert_eq!(DERIVATION_PATH, &[44 | HARDENED, 999 | HARDENED, HARDENED, 0, 0]);
+    }
+
+    #[test]
+    fn dapp_key_isolation_is_unique_per_app_id() {
+        let seed = [99u8; 64];
+        let master = DerivedKey::from_seed(&seed).unwrap();
+        let app1 = DerivedKey::for_dapp(&seed, 1).unwrap();
+        let app2 = DerivedKey::for_dapp(&seed, 2).unwrap();
+
+        // App keys are strictly distinct from each other and master
+        assert_ne!(app1.private_key, app2.private_key);
+        assert_ne!(app1.private_key, master.private_key);
+        assert_ne!(app2.private_key, master.private_key);
+
+        // Derivation for same app_id is deterministic
+        let app1_again = DerivedKey::for_dapp(&seed, 1).unwrap();
+        assert_eq!(app1.private_key, app1_again.private_key);
     }
 }
