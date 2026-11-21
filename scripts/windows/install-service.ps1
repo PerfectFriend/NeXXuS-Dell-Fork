@@ -1,6 +1,6 @@
-# NeXXuS Node — установка Windows-службы (WinSW) + firewall rule.
+﻿# NeXXuS Node — установка Windows-службы (WinSW) + firewall rule.
 # Запуск от имени администратора:
-#   irm https://raw.githubusercontent.com/PerfectFriend/NeXXuS-Node-Hermes-Rust/main/scripts/windows/install-service.ps1 | iex
+#   irm https://raw.githubusercontent.com/PerfectFriend/NeXXUs-Node/main/scripts/windows/install-service.ps1 | iex
 # или локально: powershell -ExecutionPolicy Bypass -File install-service.ps1
 [CmdletBinding()]
 param(
@@ -22,7 +22,7 @@ if (-not (Test-Path $exe)) {
     if (Test-Path $local) {
         Copy-Item $local $exe
     } else {
-        $url = "https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust/releases/latest/download/nexxusd-windows-x86_64.exe"
+        $url = "https://github.com/PerfectFriend/NeXXUs-Node/releases/latest/download/nexxusd-windows-x86_64.exe"
         Write-Host "Downloading nexxusd.exe from $url"
         Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
     }
