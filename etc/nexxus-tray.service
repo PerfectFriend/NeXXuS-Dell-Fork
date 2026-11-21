@@ -24,6 +24,8 @@ Environment=NEXXUS_PORT=3999
 Environment=NEXXUS_DATA_DIR=/var/lib/nexxus
 Environment=NEXXUS_BIN=/usr/local/bin/nexxusd
 Environment=NEXXUS_UNIT=nexxus-node.service
+Environment=NEXXUS_CONTROL_PORT=3998
+Environment=NEXXUS_DASHBOARD_URL=http://127.0.0.1:3998/
 Environment=NEXXUS_TRAY_REFRESH_MS=5000
 ExecStart=/usr/bin/python3 /opt/nexxus/scripts/nexxus-tray.py
 Restart=on-failure

@@ -15,10 +15,15 @@ WorkingDirectory=/opt/nexxus
 Environment=NODE_ENV=production
 EnvironmentFile=-/etc/nexxus/nexxus.conf
 Environment=NEXXUS_DATA_DIR=/var/lib/nexxus
-Environment=NEXXUS_STORAGE_GB=16
-Environment=NEXXUS_PORT=3999
-Environment=NEXXUS_HOST=0.0.0.0
-ExecStart=/usr/local/bin/nexxusd serve --port=3999 --data-dir=/var/lib/nexxus --storage-gb=16
+# Путь к дашборду, который демон раздаёт сам (http://<host>:<port>/).
+Environment=NEXXUS_DASHBOARD_DIR=/opt/nexxus/dashboard
+# Файл конфигурации, который редактирует дашборд.
+Environment=NEXXUS_CONFIG_FILE=/etc/nexxus/nexxus.conf
+# Порт, пул и адрес прослушивания НЕ задаются флагами в ExecStart:
+# иначе дашборд правил бы конфиг, а нода продолжала бы читать значения
+# из аргументов командной строки, и изменения не применялись бы.
+# Источник правды — /etc/nexxus/nexxus.conf через EnvironmentFile.
+ExecStart=/usr/local/bin/nexxusd serve --data-dir=/var/lib/nexxus
 Restart=always
 RestartSec=5s
 LimitNOFILE=1048576
@@ -31,7 +36,12 @@ ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/nexxus
+# Демон правит собственный конфиг (дашборд → /api/config → запись сюда),
+# поэтому каталог конфигурации тоже должен быть доступен на запись.
+# Исключение точечное: /etc/nexxus, а не весь /etc.
+# В systemd повторный ReadWritePaths перекрывает предыдущий, поэтому
+# оба пути перечисляем в одной директиве.
+ReadWritePaths=/var/lib/nexxus /etc/nexxus
 
 [Install]
 WantedBy=multi-user.target

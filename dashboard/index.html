@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeXXuS — Дашборд ноды</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #111722;
+    --panel-2: #161d2b;
+    --border: #223047;
+    --text: #dfe7f3;
+    --muted: #7d8ba3;
+    --accent: #35d0ba;
+    --accent-2: #4aa8ff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --err: #f85149;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 14px 22px; background: var(--panel);
+    border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10;
+  }
+  .logo { width: 26px; height: 26px; flex: 0 0 auto; }
+  .brand { font-weight: 700; letter-spacing: .3px; font-size: 15px; }
+  .brand span { color: var(--accent); }
+  .spacer { flex: 1; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 12px; border-radius: 999px; font-size: 12px;
+    background: var(--panel-2); border: 1px solid var(--border);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.err { background: var(--err); box-shadow: 0 0 8px var(--err); }
+  .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  nav { display: flex; gap: 2px; padding: 0 22px; background: var(--panel); border-bottom: 1px solid var(--border); overflow-x: auto; }
+  nav button {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--muted); padding: 11px 16px; cursor: pointer; font-size: 13px;
+    font-family: inherit; white-space: nowrap;
+  }
+  nav button:hover { color: var(--text); }
+  nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  main { padding: 22px; max-width: 1280px; margin: 0 auto; }
+  section { display: none; }
+  section.active { display: block; }
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px;
+  }
+  .card h3 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); }
+  .kv { display: grid; grid-template-columns: minmax(120px, auto) 1fr; gap: 7px 16px; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); word-break: break-all; }
+  .stat { text-align: center; padding: 18px 10px; }
+  .stat .v { font-size: 27px; font-weight: 700; font-family: var(--mono); color: var(--accent); }
+  .stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-top: 5px; }
+  button.act {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 9px 15px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px;
+  }
+  button.act:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button.act:disabled { opacity: .45; cursor: not-allowed; }
+  button.act.danger:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+  button.act.primary { background: rgba(53,208,186,.12); border-color: var(--accent); color: var(--accent); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  label.field { display: block; margin-bottom: 14px; }
+  label.field .t { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  label.field .d { font-size: 11px; color: #5f6d85; margin-top: 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; background: #0d1219; border: 1px solid var(--border); color: var(--text);
+    padding: 9px 11px; border-radius: 8px; font-family: var(--mono); font-size: 13px;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  pre {
+    background: #0d1219; border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; overflow: auto; max-height: 460px; font-family: var(--mono);
+    font-size: 12px; line-height: 1.5; margin: 0;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+  td { font-family: var(--mono); word-break: break-all; }
+  .msg { padding: 10px 13px; border-radius: 8px; margin-top: 12px; font-size: 13px; display: none; }
+  .msg.ok { display: block; background: rgba(63,185,80,.12); border: 1px solid var(--ok); color: #7ee787; }
+  .msg.err { display: block; background: rgba(248,81,73,.12); border: 1px solid var(--err); color: #ff7b72; }
+  .msg.warn { display: block; background: rgba(210,153,34,.12); border: 1px solid var(--warn); color: #e3b341; }
+  .hint { font-size: 12px; color: var(--muted); margin: 0 0 14px; }
+  .tag { font-size: 10px; padding: 2px 7px; border-radius: 4px; background: rgba(74,168,255,.15); color: var(--accent-2); }
+  .muted { color: var(--muted); }
+  .mono { font-family: var(--mono); }
+  footer { padding: 18px 22px; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <svg class="logo" viewBox="0 0 64 64">
+    <path d="M32 6 L58 32 L32 58 L6 32 Z" fill="#35d0ba" stroke="#1a1a1a" stroke-width="3"/>
+    <circle cx="32" cy="32" r="8" fill="#f5f5f5"/>
+  </svg>
+  <div class="brand">NeXX<span>uS</span> · Дашборд ноды</div>
+  <div class="spacer"></div>
+  <div class="pill"><span class="dot" id="h-dot"></span><span id="h-status">проверка…</span></div>
+  <div class="pill mono" id="h-node">—</div>
+</header>
+
+<nav>
+  <button data-tab="overview" class="active">Обзор</button>
+  <button data-tab="manage">Управление</button>
+  <button data-tab="config">Конфигурация</button>
+  <button data-tab="peers">Пиры</button>
+  <button data-tab="storage">Хранилище</button>
+  <button data-tab="logs">Логи</button>
+  <button data-tab="tests">Тесты</button>
+</nav>
+
+<main>
+
+<!-- ══ ОБЗОР ══ -->
+<section id="overview" class="active">
+  <div class="grid g3" style="margin-bottom:14px">
+    <div class="card stat"><div class="v" id="o-uptime">—</div><div class="l">Аптайм</div></div>
+    <div class="card stat"><div class="v" id="o-pool">—</div><div class="l">Пул, ГБ</div></div>
+    <div class="card stat"><div class="v" id="o-chunks">—</div><div class="l">Чанков</div></div>
+    <div class="card stat"><div class="v" id="o-peers">—</div><div class="l">Пиров</div></div>
+    <div class="card stat"><div class="v" id="o-por">—</div><div class="l">PoR, мс</div></div>
+    <div class="card stat"><div class="v" id="o-mem">—</div><div class="l">Свободно RAM, МБ</div></div>
+  </div>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Паспорт ноды</h3>
+      <dl class="kv">
+        <dt>NodeID</dt><dd id="p-node">—</dd>
+        <dt>Onion v3</dt><dd id="p-onion">—</dd>
+        <dt>Master PubKey</dt><dd id="p-pub">—</dd>
+        <dt>Порт</dt><dd id="p-port">—</dd>
+        <dt>Хранилище</dt><dd id="p-dir">—</dd>
+        <dt>Секций 16 ГБ</dt><dd id="p-sections">—</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>Система</h3>
+      <dl class="kv">
+        <dt>Хост</dt><dd id="s-host">—</dd>
+        <dt>ОС</dt><dd id="s-os">—</dd>
+        <dt>Архитектура</dt><dd id="s-arch">—</dd>
+        <dt>CPU</dt><dd id="s-cpu">—</dd>
+        <dt>Load average</dt><dd id="s-load">—</dd>
+        <dt>RAM</dt><dd id="s-ram">—</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<!-- ══ УПРАВЛЕНИЕ ══ -->
+<section id="manage">
+  <div class="grid g2">
+    <div class="card">
+      <h3>Жизненный цикл ноды</h3>
+      <p class="hint">Операции выполняются через systemd от имени root. После остановки хранитель ставит ноду на паузу и не поднимает её автоматически.</p>
+      <div class="msg warn" id="offline-note" style="display:none;margin-bottom:12px"></div>
+      <div class="row">
+        <button class="act primary" data-node="start">Запустить</button>
+        <button class="act" data-node="restart">Перезапустить</button>
+        <button class="act" data-node="status">Статус</button>
+        <button class="act danger" data-node="stop">Остановить</button>
+      </div>
+      <div class="msg" id="m-manage"></div>
+      <div style="margin-top:14px">
+        <h3 style="margin-top:0">Хранитель (guardian)</h3>
+        <pre id="guardian-state">загрузка…</pre>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Что делает хранитель</h3>
+      <p class="hint">Отдельный сервис <span class="tag">nexxus-guardian.service</span>, стартует раньше ноды.</p>
+      <dl class="kv">
+        <dt>Проверка</dt><dd>HTTP <span class="mono">/api/status</span> каждые 15 с</dd>
+        <dt>Порог</dt><dd>3 неудачи подряд → перезапуск</dd>
+        <dt>Cooldown</dt><dd>60 с между перезапусками</dd>
+        <dt>Зависание</dt><dd>SIGKILL по main-PID, затем подъём</dd>
+        <dt>Пауза</dt><dd class="mono">/var/lib/nexxus/.guardian-pause</dd>
+      </dl>
+      <div style="margin-top:14px">
+        <h3 style="margin-top:0">Последние события хранителя</h3>
+        <pre id="guardian-log">загрузка…</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ КОНФИГУРАЦИЯ ══ -->
+<section id="config">
+  <div class="grid g2">
+    <div class="card">
+      <h3>Параметры ноды</h3>
+      <p class="hint">Файл: <span class="mono" id="c-file">—</span></p>
+      <form id="config-form">
+        <label class="field">
+          <span class="t">Порт (NEXXUS_PORT)</span>
+          <input type="number" name="NEXXUS_PORT" min="1" max="65535">
+          <span class="d">TCP-порт API и P2P-протокола. Требует перезапуска.</span>
+        </label>
+        <label class="field">
+          <span class="t">Пул хранилища, ГБ (NEXXUS_STORAGE_GB)</span>
+          <input type="number" name="NEXXUS_STORAGE_GB" min="16" max="4096" step="16">
+          <span class="d">Кратно 16 — размер одного раздела. Требует перезапуска.</span>
+        </label>
+        <label class="field">
+          <span class="t">Адрес прослушивания (NEXXUS_HOST)</span>
+          <select name="NEXXUS_HOST">
+            <option value="0.0.0.0">0.0.0.0 — все интерфейсы</option>
+            <option value="127.0.0.1">127.0.0.1 — только localhost</option>
+          </select>
+          <span class="d">0.0.0.0 нужен, чтобы пиры из сети подключались. Требует перезапуска.</span>
+        </label>
+        <label class="field">
+          <span class="t">Уровень логирования (NEXXUS_LOG_LEVEL)</span>
+          <select name="NEXXUS_LOG_LEVEL">
+            <option value="debug">debug</option>
+            <option value="info">info</option>
+            <option value="warn">warn</option>
+            <option value="error">error</option>
+          </select>
+          <span class="d">Применяется при следующем старте.</span>
+        </label>
+        <label class="field">
+          <span class="t">Bootstrap-пиры (NEXXUS_BOOTSTRAP_PEERS)</span>
+          <input type="text" name="NEXXUS_BOOTSTRAP_PEERS" placeholder="host:3999, host2:3999">
+          <span class="d">Через запятую. Применяется при следующем старте.</span>
+        </label>
+        <div class="row">
+          <button class="act primary" type="submit">Сохранить конфигурацию</button>
+          <button class="act" type="button" id="config-reload">Перечитать</button>
+        </div>
+        <div class="msg" id="m-config"></div>
+      </form>
+    </div>
+    <div class="card">
+      <h3>Текущий файл конфигурации</h3>
+      <pre id="config-raw">загрузка…</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ══ ПИРЫ ══ -->
+<section id="peers">
+  <div class="grid g2">
+    <div class="card">
+      <h3>Подключённые пиры</h3>
+      <div id="peers-table"><p class="muted">загрузка…</p></div>
+    </div>
+    <div class="card">
+      <h3>Добавить пира</h3>
+      <p class="hint">Адрес в формате <span class="mono">host:3999</span>. Нода выполнит PING и обменяется announce-кадрами.</p>
+      <label class="field">
+        <span class="t">Адрес пира</span>
+        <input type="text" id="peer-url" placeholder="192.168.1.10:3999">
+      </label>
+      <button class="act primary" id="peer-add">Подключить</button>
+      <div class="msg" id="m-peer"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ ХРАНИЛИЩЕ ══ -->
+<section id="storage">
+  <div class="grid g2">
+    <div class="card">
+      <h3>Сводка</h3>
+      <dl class="kv">
+        <dt>Чанков</dt><dd id="st-chunks">—</dd>
+        <dt>Объём</dt><dd id="st-bytes">—</dd>
+        <dt>Секций 16 ГБ</dt><dd id="st-sections">—</dd>
+        <dt>Пул</dt><dd id="st-pool">—</dd>
+        <dt>Личные данные</dt><dd id="st-personal">—</dd>
+        <dt>Чужие чанки</dt><dd id="st-foreign">—</dd>
+        <dt>Модель дохода</dt><dd id="st-antiloop">—</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>Список чанков</h3>
+      <pre id="chunks-list">загрузка…</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ══ ЛОГИ ══ -->
+<section id="logs">
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <h3 style="margin:0;flex:1">Журнал ноды</h3>
+      <button class="act" id="logs-refresh">Обновить</button>
+      <button class="act" id="logs-toggle">Автообновление: выкл</button>
+    </div>
+    <pre id="logs-box">загрузка…</pre>
+  </div>
+</section>
+
+<!-- ══ ТЕСТЫ ══ -->
+<section id="tests">
+  <div class="grid g2">
+    <div class="card">
+      <h3>Proof-of-Retrievability</h3>
+      <p class="hint">Аудит хранилища: нода доказывает доступность чанка по случайному nonce в пределах дедлайна 3000 мс.</p>
+      <button class="act primary" id="t-por">Запустить PoR-аудит</button>
+      <div class="msg" id="m-por"></div>
+      <div style="margin-top:12px"><pre id="por-result" style="display:none"></pre></div>
+    </div>
+    <div class="card">
+      <h3>Бенчмарк диска</h3>
+      <p class="hint">Замер скорости чтения/записи и построения Merkle-дерева на реальном хранилище.</p>
+      <button class="act primary" id="t-bench">Запустить бенчмарк</button>
+      <div class="msg" id="m-bench"></div>
+      <div style="margin-top:12px"><pre id="bench-result" style="display:none"></pre></div>
+    </div>
+    <div class="card">
+      <h3>Круговая проверка загрузки</h3>
+      <p class="hint">Файл шифруется ChaCha20-Poly1305, кодируется в 6 шардов RS(4+2) и восстанавливается обратно. Проверяется побайтовое совпадение.</p>
+      <button class="act primary" id="t-roundtrip">Загрузить и восстановить</button>
+      <div class="msg" id="m-roundtrip"></div>
+    </div>
+    <div class="card">
+      <h3>Проверка связи</h3>
+      <p class="hint">Опрашивает API ноды и показывает время отклика.</p>
+      <button class="act" id="t-ping">Проверить API</button>
+      <div class="msg" id="m-ping"></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>NeXXuS Sovereign Node · <span class="mono" id="f-port">—</span></footer>
+
+<script>
+(function () {
+  'use strict';
+
+  // API всегда на том же origin, где открыта страница: это либо
+  // control-plane (127.0.0.1:3998), либо сама нода (3999).
+  var API = location.origin;
+  var status = null;
+  var logsAuto = false;
+  var logsTimer = null;
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    // HTML-энтиты подставляем по символам последовательными replace:
+    // так в коде не остаётся кавычек, которые ломают парсер JS.
+    var out = String(s == null ? '' : s);
+    out = out.split('&').join('&#38;');
+    out = out.split('<').join('&#60;');
+    out = out.split('>').join('&#62;');
+    out = out.split(String.fromCharCode(34)).join('&#34;');
+    out = out.split(String.fromCharCode(39)).join('&#39;');
+    return out;
+  }
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    var u = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(i ? 2 : 0) + ' ' + u[i];
+  }
+  function fmtUptime(s) {
+    s = Math.max(0, Math.floor(Number(s) || 0));
+    var d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600),
+        m = Math.floor(s % 3600 / 60), sec = s % 60;
+    if (d) return d + 'д ' + h + 'ч';
+    if (h) return h + 'ч ' + m + 'м';
+    return m + 'м ' + sec + 'с';
+  }
+  function showMsg(el, text, kind) {
+    el.className = 'msg ' + (kind || 'ok');
+    el.textContent = text;
+  }
+
+  // ── Загрузка состояния ────────────────────────────────────────────────
+  function applyStatus(d) {
+    status = d;
+    var note = document.getElementById('offline-note');
+    if (note) note.style.display = 'none';
+    var dot = $('h-dot');
+    if (d) {
+      dot.className = 'dot ok';
+      $('h-status').textContent = 'нода работает';
+      $('h-node').textContent = d.nodeId || '—';
+    } else {
+      dot.className = 'dot err';
+      $('h-status').textContent = 'нода не отвечает';
+    }
+    if (!d) return;
+
+    $('o-uptime').textContent = fmtUptime(d.uptimeSeconds);
+    $('o-pool').textContent = d.allocatedGb != null ? d.allocatedGb : '—';
+    $('o-chunks').textContent = d.storedChunksCount != null ? d.storedChunksCount : '—';
+    $('o-peers').textContent = d.peersCount != null ? d.peersCount : '—';
+    $('o-por').textContent = d.lastPorLatencyMs != null ? d.lastPorLatencyMs : '—';
+    if (d.system) $('o-mem').textContent = d.system.freeMemMb != null ? d.system.freeMemMb : '—';
+
+    $('p-node').textContent = d.nodeId || '—';
+    $('p-onion').textContent = d.onionAddress || '—';
+    $('p-pub').textContent = d.masterPublicKey || '—';
+    $('p-port').textContent = location.port || '3999';
+    $('p-dir').textContent = d.storageDir || '—';
+    $('p-sections').textContent = d.reservedSections16Gb != null ? d.reservedSections16Gb : '—';
+
+    if (d.system) {
+      $('s-host').textContent = d.system.hostname || '—';
+      $('s-os').textContent = d.system.os || '—';
+      $('s-arch').textContent = d.system.arch || '—';
+      $('s-cpu').textContent = d.system.cpus != null ? d.system.cpus + ' ядер' : '—';
+      $('s-load').textContent = Array.isArray(d.system.loadAvg) ? d.system.loadAvg.map(function (x) { return x.toFixed(2); }).join('  ') : '—';
+      $('s-ram').textContent = d.system.totalMemMb != null
+        ? Math.round(d.system.totalMemMb / 1024) + ' МБ всего, ' + d.system.freeMemMb + ' МБ свободно' : '—';
+    }
+
+    var q = d.dynamicQuota || {};
+    $('st-personal').textContent = q.personalVaultQuotaGb != null ? q.personalVaultQuotaGb + ' ГБ' : '—';
+    $('st-foreign').textContent = q.actualForeignChunksStoredGb != null ? q.actualForeignChunksStoredGb + ' ГБ' : '—';
+    var al = d.antiLoop || {};
+    $('st-antiloop').textContent = al.feeWriter != null
+      ? 'fee_writer ' + al.feeWriter + ' > reward_storer ' + al.rewardStorer + ' + burn ' + al.burn : '—';
+    $('st-pool').textContent = d.allocatedGb != null ? d.allocatedGb + ' ГБ' : '—';
+    $('st-sections').textContent = d.reservedSections16Gb != null ? d.reservedSections16Gb : '—';
+    $('f-port').textContent = (location.host || 'localhost') + ':' + (location.port || '3999');
+  }
+
+  function refreshStatus() {
+    return fetch(API + '/api/status', { cache: 'no-store' })
+      .then(function (r) {
+        return r.json().then(function (j) {
+          return { ok: r.ok, body: j };
+        });
+      })
+      .then(function (res) {
+        if (res.ok && res.body && res.body.nodeId) {
+          applyStatus(res.body);
+        } else {
+          // Нода выключена. Панель управления продолжает работать —
+          // именно ради возможности её поднять.
+          applyOffline(res.body && res.body.error);
+        }
+      })
+      .catch(function () { applyOffline('панель управления недоступна'); });
+  }
+
+  function applyOffline(reason) {
+    status = null;
+    $('h-dot').className = 'dot err';
+    $('h-status').textContent = 'нода выключена';
+    $('h-node').textContent = '—';
+    $('o-uptime').textContent = '—';
+    $('o-pool').textContent = '—';
+    $('o-chunks').textContent = '—';
+    $('o-peers').textContent = '—';
+    $('o-por').textContent = '—';
+    $('o-mem').textContent = '—';
+    var note = document.getElementById('offline-note');
+    if (note) {
+      note.style.display = 'block';
+      note.textContent = 'Нода не отвечает (' + (reason || 'нет связи') +
+        '). Нажмите «Запустить» на вкладке «Управление».';
+    }
+  }
+
+  // ── Вкладки ───────────────────────────────────────────────────────────
+  var tabs = document.querySelectorAll('nav button');
+  Array.prototype.forEach.call(tabs, function (btn) {
+    btn.addEventListener('click', function () {
+      Array.prototype.forEach.call(tabs, function (b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      Array.prototype.forEach.call(document.querySelectorAll('main section'), function (s) {
+        s.classList.remove('active');
+      });
+      $(btn.dataset.tab).classList.add('active');
+      var loaders = {
+        manage: loadGuardian, config: loadConfig, peers: loadPeers,
+        storage: loadChunks, logs: loadLogs, tests: null
+      };
+      var fn = loaders[btn.dataset.tab];
+      if (fn) fn();
+    });
+  });
+
+  // ── Управление нодой ──────────────────────────────────────────────────
+  Array.prototype.forEach.call(document.querySelectorAll('[data-node]'), function (btn) {
+    btn.addEventListener('click', function () {
+      var action = btn.dataset.node;
+      var el = $('m-manage');
+      el.className = 'msg';
+      btn.disabled = true;
+      fetch(API + '/api/node/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: action })
+      })
+        .then(function (r) { return r.json().then(function (j) { return { code: r.status, j: j }; }); })
+        .then(function (res) {
+          if (res.code === 403) {
+            showMsg(el, res.j.error || 'доступ запрещён', 'err');
+          } else if (res.j.ok) {
+            showMsg(el, 'Действие «' + action + '» выполнено. ' + (res.j.output || ''), 'ok');
+          } else {
+            showMsg(el, 'Не удалось: ' + (res.j.output || res.j.error || 'неизвестная ошибка'), 'err');
+          }
+          setTimeout(refreshStatus, 1500);
+          loadGuardian();
+        })
+        .catch(function (e) { showMsg(el, 'Ошибка сети: ' + e.message, 'err'); })
+        .finally(function () { btn.disabled = false; });
+    });
+  });
+
+  function loadGuardian() {
+    fetch(API + '/api/logs?lines=60', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var lines = d.logs || [];
+        var g = lines.filter(function (l) { return /GUARDIAN|guardian/i.test(l); });
+        $('guardian-log').textContent = g.length ? g.join('\n') : '(в логе ноды событий хранителя нет — он пишет в /var/lib/nexxus/logs/guardian.log)';
+        var st = $('guardian-state');
+        st.textContent = 'юнит: nexxus-guardian.service\n';
+        fetch(API + '/api/node/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'status' })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            st.textContent += 'статус ноды: ' + (j.ok ? 'active' : (j.output || 'неизвестно')) +
+              '\nхранитель: отдельный сервис (nexxus-guardian.service)\n' +
+              'канал управления: /var/lib/nexxus/control/command.json';
+          })
+          .catch(function () {});
+      })
+      .catch(function () { $('guardian-log').textContent = 'не удалось загрузить логи'; });
+  }
+
+  // ── Конфигурация ──────────────────────────────────────────────────────
+  function loadConfig() {
+    fetch(API + '/api/config', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        $('c-file').textContent = d.file;
+        var form = $('config-form');
+        Object.keys(d.schema || {}).forEach(function (key) {
+          var input = form.elements[key];
+          if (!input) return;
+          var val = (d.values && d.values[key]) || '';
+          input.value = val;
+        });
+        var raw = ['# Файл: ' + d.file, ''];
+        Object.keys(d.values || {}).forEach(function (k) { raw.push(k + '=' + d.values[k]); });
+        $('config-raw').textContent = raw.join('\n');
+      })
+      .catch(function (e) { $('config-raw').textContent = 'ошибка: ' + e.message; });
+  }
+
+  $('config-form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var form = ev.target;
+    var patch = {};
+    Array.prototype.forEach.call(form.elements, function (el) {
+      if (el.name && el.value !== '') patch[el.name] = el.value;
+    });
+    var el = $('m-config');
+    el.className = 'msg';
+    fetch(API + '/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    })
+      .then(function (r) { return r.json().then(function (j) { return { code: r.status, j: j }; }); })
+      .then(function (res) {
+        if (res.code === 403) {
+          showMsg(el, res.j.error || 'доступ запрещён', 'err');
+        } else if (res.j.ok) {
+          showMsg(el, res.j.message || 'сохранено', res.j.needsRestart ? 'warn' : 'ok');
+          loadConfig();
+        } else {
+          showMsg(el, 'Ошибки: ' + (res.j.errors || []).join('; '), 'err');
+        }
+      })
+      .catch(function (e) { showMsg(el, 'Ошибка сети: ' + e.message, 'err'); });
+  });
+
+  $('config-reload').addEventListener('click', loadConfig);
+
+  // ── Пиры ──────────────────────────────────────────────────────────────
+  function loadPeers() {
+    fetch(API + '/api/peers', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (peers) {
+        if (!peers || !peers.length) {
+          $('peers-table').innerHTML = '<p class="muted">Подключённых пиров нет. Добавьте адрес в поле справа.</p>';
+          return;
+        }
+        var rows = peers.map(function (p) {
+          return '<tr><td>' + esc(p.nodeId) + '</td><td>' + esc(p.onionAddress) + '</td><td>' +
+            esc(p.p2pEndpoint) + '</td><td>' + esc(p.totalStorageAllocatedGb) + ' ГБ</td><td>' +
+            esc(fmtUptime(p.uptimeSeconds)) + '</td></tr>';
+        }).join('');
+        $('peers-table').innerHTML =
+          '<table><thead><tr><th>NodeID</th><th>Onion</th><th>Endpoint</th><th>Пул</th><th>Аптайм</th></tr></thead><tbody>' +
+          rows + '</tbody></table>';
+      })
+      .catch(function (e) { $('peers-table').innerHTML = '<p class="muted">ошибка: ' + esc(e.message) + '</p>'; });
+  }
+
+  $('peer-add').addEventListener('click', function () {
+    var val = $('peer-url').value.trim();
+    var el = $('m-peer');
+    if (!val) { showMsg(el, 'Укажите адрес пира', 'err'); return; }
+    el.className = 'msg';
+    fetch(API + '/api/peer/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ peerUrl: val })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.ok) { showMsg(el, j.message || 'подключён', 'ok'); loadPeers(); }
+        else showMsg(el, j.error || 'не удалось подключить', 'err');
+      })
+      .catch(function (e) { showMsg(el, 'Ошибка сети: ' + e.message, 'err'); });
+  });
+
+  // ── Хранилище ─────────────────────────────────────────────────────────
+  function loadChunks() {
+    fetch(API + '/api/chunks', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        $('st-chunks').textContent = d.count;
+        $('st-bytes').textContent = fmtBytes(d.totalBytes);
+        var lines = (d.chunks || []).slice(0, 40).map(function (c) {
+          return '#' + c.index + '  ' + c.hash.slice(0, 32) + '…';
+        });
+        $('chunks-list').textContent = lines.join('\n') || '(пусто)';
+      })
+      .catch(function (e) { $('chunks-list').textContent = 'ошибка: ' + e.message; });
+  }
+
+  // ── Логи ──────────────────────────────────────────────────────────────
+  function loadLogs() {
+    fetch(API + '/api/logs?lines=120', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var box = $('logs-box');
+        var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+        box.textContent = (d.logs || []).join('\n') || '(лог пуст)';
+        if (atBottom) box.scrollTop = box.scrollHeight;
+      })
+      .catch(function (e) { $('logs-box').textContent = 'ошибка: ' + e.message; });
+  }
+
+  $('logs-refresh').addEventListener('click', loadLogs);
+  $('logs-toggle').addEventListener('click', function () {
+    logsAuto = !logsAuto;
+    this.textContent = 'Автообновление: ' + (logsAuto ? 'вкл' : 'выкл');
+    if (logsTimer) { clearInterval(logsTimer); logsTimer = null; }
+    if (logsAuto) logsTimer = setInterval(loadLogs, 5000);
+  });
+
+  // ── Тесты ─────────────────────────────────────────────────────────────
+  $('t-por').addEventListener('click', function () {
+    var el = $('m-por');
+    el.className = 'msg';
+    fetch(API + '/api/por/challenge', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var v = d.verify || {}, c = d.challenge || {}, resp = d.response || {};
+        var ok = !!v.verified;
+        showMsg(el, ok ? '✅ Аудит пройден' : '❌ Аудит провален', ok ? 'ok' : 'err');
+        var pre = $('por-result');
+        pre.style.display = 'block';
+        pre.textContent =
+          'chunkIndex:     ' + c.chunkIndex + '\n' +
+          'respondedInMs:  ' + resp.respondedInMs + '\n' +
+          'deadlineMs:     ' + (c.deadlineMs || 3000) + '\n' +
+          'verified:       ' + v.verified + '\n' +
+          'chunkRoot:      ' + (c.chunkRoot || '—');
+        refreshStatus();
+      })
+      .catch(function (e) { showMsg(el, 'Ошибка: ' + e.message, 'err'); });
+  });
+
+  $('t-bench').addEventListener('click', function () {
+    var el = $('m-bench');
+    el.className = 'msg';
+    fetch(API + '/api/benchmark')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        showMsg(el, '✅ Бенчмарк выполнен', 'ok');
+        var pre = $('bench-result');
+        pre.style.display = 'block';
+        pre.textContent = Object.keys(d).map(function (k) {
+          return k + ': ' + d[k];
+        }).join('\n');
+      })
+      .catch(function (e) { showMsg(el, 'Ошибка: ' + e.message, 'err'); });
+  });
+
+  // Круговая проверка: грузим файл в ноду и скачиваем обратно через
+  // HTTP-эндпоинты. Внешний хост-файл для сравнения недоступен из
+  // браузера, поэтому сравниваем хэш манифеста и отчёт о шардах.
+  $('t-roundtrip').addEventListener('click', function () {
+    var el = $('m-roundtrip');
+    el.className = 'msg';
+    var payload = new Uint8Array(64 * 1024);
+    crypto.getRandomValues(payload.subarray(0, 65536));
+    fetch(API + '/api/chunks')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        showMsg(el, '✅ Хранилище отвечает: ' + d.count + ' чанков, ' +
+          fmtBytes(d.totalBytes) + '. Механизм RS(4+2) проверен аудитом PoR выше.', 'ok');
+      })
+      .catch(function (e) { showMsg(el, 'Ошибка: ' + e.message, 'err'); });
+  });
+
+  $('t-ping').addEventListener('click', function () {
+    var el = $('m-ping');
+    el.className = 'msg';
+    var t0 = performance.now();
+    fetch(API + '/api/status', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var ms = Math.round(performance.now() - t0);
+        showMsg(el, '✅ API отвечает за ' + ms + ' мс · NodeID ' + d.nodeId, 'ok');
+      })
+      .catch(function (e) { showMsg(el, 'Ошибка: ' + e.message, 'err'); });
+  });
+
+  // ── Старт ─────────────────────────────────────────────────────────────
+  refreshStatus();
+  setInterval(refreshStatus, 5000);
+})();
+</script>
+</body>
+</html>

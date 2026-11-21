@@ -20,6 +20,7 @@ import path from 'path';
 import os from 'os';
 import http from 'http';
 import crypto from 'crypto';
+import { spawn } from 'child_process';
 import { WebSocketServer, WebSocket } from 'ws';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
@@ -34,6 +35,18 @@ import {
   verifyAuditorPor 
 } from '../src/utils/merkleProof.js';
 import { calculate16GbSections, calculateDynamicVaultQuota, calculateAntiLoopModel } from '../src/utils/storageManager.js';
+import {
+  CONFIG_FILE,
+  DASHBOARD_DIR,
+  describeConfig,
+  isLoopback,
+  readConfigFile,
+  scheduleSystemctlAction,
+  serveDashboardFile,
+  systemctlAction,
+  validateConfigPatch,
+  writeConfigPatch,
+} from '../src/utils/nexxusControl.js';
 import { deriveIdentityFromMnemonic, deriveBipSplitKeys, generateBip39Mnemonic, isValidBip39Mnemonic } from '../src/utils/bip39.js';
 import {
   KademliaRoutingTable,
@@ -1220,6 +1233,127 @@ Configuration:
     }
 
     const url = req.url || '/';
+    const remoteAddress = req.socket.remoteAddress;
+
+    // ── Дашборд ноды (статика) ───────────────────────────────────────────
+    // Отдаётся демоном, поэтому открывается по тому же адресу, что и API,
+    // без отдельного веб-сервера. Читать можно откуда угодно, мутировать —
+    // только с loopback (см. проверки ниже).
+    if (!url.startsWith('/api/')) {
+      if (serveDashboardFile(url, res)) return;
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Dashboard not found');
+      return;
+    }
+
+    // ── Конфигурация ноды ────────────────────────────────────────────────
+    // GET /api/config — текущий конфиг, схема и эффективные значения.
+    if (url === '/api/config' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(describeConfig(CONFIG_FILE), null, 2));
+      return;
+    }
+
+    // POST /api/config — применить изменения конфига.
+    // Только с loopback: конфиг задаёт порт и пул ноды, а нода слушает
+    // 0.0.0.0 — значит запрос может прийти из локальной сети.
+    if (url === '/api/config' && req.method === 'POST') {
+      if (!isLoopback(remoteAddress)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Изменение конфигурации доступно только с localhost' }));
+        return;
+      }
+      let bodyStr = '';
+      req.on('data', c => { bodyStr += c; });
+      req.on('end', () => {
+        try {
+          const patch = JSON.parse(bodyStr || '{}');
+          const current = readConfigFile(CONFIG_FILE);
+          const { values, errors } = validateConfigPatch(patch, current);
+          if (errors.length) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, errors }));
+            return;
+          }
+          const written = writeConfigPatch(values, CONFIG_FILE);
+          if (!written.ok) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, errors: [written.error || 'не удалось записать конфиг'] }));
+            return;
+          }
+          // Часть параметров (порт, пул, хост) читается только при старте —
+          // сообщаем, что нужен перезапуск, чтобы это было видно в UI.
+          const needsRestart = ['NEXXUS_PORT', 'NEXXUS_HOST', 'NEXXUS_STORAGE_GB']
+            .some(k => k in values);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            ok: true,
+            applied: values,
+            needsRestart,
+            message: needsRestart
+              ? 'Конфиг сохранён. Для применения нужно перезапустить ноду.'
+              : 'Конфиг сохранён.',
+          }));
+        } catch (e: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, errors: [e.message] }));
+        }
+      });
+      return;
+    }
+
+    // POST /api/node/action — управление жизненным циклом ноды.
+    // Только с loopback: операция привилегированная (systemctl от root).
+    if (url === '/api/node/action' && req.method === 'POST') {
+      if (!isLoopback(remoteAddress)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Управление нодой доступно только с localhost' }));
+        return;
+      }
+      let bodyStr = '';
+      req.on('data', c => { bodyStr += c; });
+      req.on('end', async () => {
+        try {
+          const { action } = JSON.parse(bodyStr || '{}');
+          if (!['start', 'stop', 'restart', 'status'].includes(action)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: false, error: 'Действие: start|stop|restart|status' }));
+            return;
+          }
+          // При остановке ставим паузу хранителю, иначе он вернёт ноду.
+          const pauseFile = path.join(dataDir, '.guardian-pause');
+          if (action === 'stop') {
+            try { fs.writeFileSync(pauseFile, `stopped via dashboard at ${new Date().toISOString()}\n`); } catch {}
+          } else if (action === 'start' || action === 'restart') {
+            try { fs.unlinkSync(pauseFile); } catch {}
+          }
+
+          if (action === 'status') {
+            const result = await systemctlAction(action);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: result.ok, action, output: result.output }));
+            return;
+          }
+
+          // start/stop/restart останавливают САМ демон, который вызвал
+          // этот эндпоинт. Ждать systemctl нельзя — процесс умрёт до
+          // ответа. Отвечаем сразу, а команду запускаем с задержкой,
+          // чтобы HTTP-ответ точно ушёл клиенту первым.
+          const result = scheduleSystemctlAction(action);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            ok: result.ok,
+            action,
+            output: result.output,
+            message: 'Команда отправлена. Нода будет перезапущена через секунду.',
+          }));
+        } catch (e: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: e.message }));
+        }
+      });
+      return;
+    }
 
     // GET /api/status
     if (url === '/api/status') {

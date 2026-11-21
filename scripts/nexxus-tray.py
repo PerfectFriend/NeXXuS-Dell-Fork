@@ -51,6 +51,12 @@ NEXXUS_PAUSE_FILE = os.environ.get(
 NEXXUS_CONTROL_DIR = os.environ.get(
     "NEXXUS_CONTROL_DIR", os.path.join(NEXXUS_DATA_DIR, "control")
 )
+# Порт control-plane: веб-панель управления, которая работает даже при
+# выключенной ноде. Дашборд открываем через неё, а не через API ноды.
+NEXXUS_CONTROL_PORT = os.environ.get("NEXXUS_CONTROL_PORT", "3998")
+NEXXUS_DASHBOARD_URL = os.environ.get(
+    "NEXXUS_DASHBOARD_URL", f"http://127.0.0.1:{NEXXUS_CONTROL_PORT}/"
+)
 BASE_URL = f"http://{NEXXUS_HOST}:{NEXXUS_PORT}"
 REFRESH_MS = int(os.environ.get("NEXXUS_TRAY_REFRESH_MS", "5000"))
 LOG_LINES = int(os.environ.get("NEXXUS_TRAY_LOG_LINES", "40"))
@@ -219,6 +225,15 @@ class TrayIcon(QSystemTrayIcon):
         self.status_action.setEnabled(False)
         menu.addAction(self.status_action)
 
+        # Дашборд — главный пункт: полное управление нодой и её конфигурацией.
+        # Открывается control-plane, который работает даже при выключенной
+        # ноде, — иначе из дашборда нельзя было бы нажать «Запустить».
+        self.dashboard_action = QAction("Открыть дашборд ноды…", menu)
+        self.dashboard_action.triggered.connect(self.open_dashboard)
+        menu.addAction(self.dashboard_action)
+
+        menu.addSeparator()
+
         self.passport_action = QAction("Паспорт ноды", menu)
         self.passport_action.triggered.connect(self.show_passport)
         menu.addAction(self.passport_action)
@@ -373,6 +388,61 @@ class TrayIcon(QSystemTrayIcon):
     def show_logs(self):
         log_path = os.path.join(NEXXUS_DATA_DIR, "logs", "nexxusd.log")
         self.notify("Логи ноды (хвост)", tail_log(log_path))
+
+    def open_dashboard(self):
+        """Открыть веб-дашборд ноды в браузере по умолчанию.
+
+        Дашборд отдаёт control-plane (127.0.0.1:3998), а не сама нода:
+        control-plane работает даже когда нода выключена, поэтому
+        из панели можно и поднять ноду, и настроить её конфигурацию.
+        """
+        url = NEXXUS_DASHBOARD_URL
+        # Сначала проверяем, что панель отвечает — иначе пользователь
+        # увидит «connection refused» без объяснения.
+        try:
+            with urllib.request.urlopen(url, timeout=6) as resp:
+                reachable = resp.status == 200
+        except Exception as exc:
+            reachable = False
+            self.notify(
+                "Дашборд ноды",
+                f"Панель управления не отвечает:\n{exc}\n\n"
+                f"Проверьте сервис:\n"
+                f"systemctl status nexxus-control.service\n\n"
+                f"URL: {url}",
+                error=True,
+            )
+            return
+
+        if not reachable:
+            self.notify("Дашборд ноды", f"Панель ответила неуспешно: {url}", error=True)
+            return
+
+        try:
+            from PyQt5.QtGui import QDesktopServices
+            from PyQt5.QtCore import QUrl
+            opened = QDesktopServices.openUrl(QUrl(url))
+        except Exception as exc:
+            opened = False
+            self.notify("Дашборд ноды", f"Не удалось открыть браузер: {exc}", error=True)
+
+        if not opened:
+            # Фолбэк: xdg-open не зависит от Qt.
+            try:
+                subprocess.Popen(
+                    ["xdg-open", url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                opened = True
+            except Exception:
+                pass
+
+        if not opened:
+            self.notify(
+                "Дашборд ноды",
+                f"Не удалось открыть браузер автоматически.\n\nОткройте вручную:\n{url}",
+            )
 
     def restart_node(self):
         ok, out = guardian_command("restart", timeout=180)
