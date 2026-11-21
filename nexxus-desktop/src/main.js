@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import QRCode from 'qrcode';
 import { render as renderOverview } from './views/overview.js';
 import { formatUptime, formatBytes } from './format.js';
 
@@ -424,6 +425,29 @@ async function refreshChunks() {
   }
 }
 
+// H1: QR-контакт — единый payload "nexxus:<node_id hex 64>".
+function contactPayload(nodeId) { return `nexxus:${nodeId}`; }
+function parseContact(text) {
+  const t = (text || '').trim();
+  const m = t.match(/^nexxus:([0-9a-fA-F]{64})$/);
+  return m ? m[1].toLowerCase() : null;
+}
+async function showMyQr() {
+  const cv = $('qr-canvas');
+  const id = (state.nodeId || '').trim();
+  if (!/^[0-9a-f]{64}$/i.test(id)) { $('contact-status').textContent = 'node_id ещё не получен — обновите статус.'; return; }
+  await QRCode.toCanvas(cv, contactPayload(id), { width: 220, margin: 1, errorCorrectionLevel: 'M' });
+  cv.style.display = '';
+  $('contact-status').textContent = `Ваш контакт: ${contactPayload(id)}`;
+}
+function addContactFromText() {
+  const id = parseContact($('contact-text').value);
+  if (!id) { $('contact-status').textContent = 'Формат: nexxus:<64 hex node_id>'; return; }
+  $('smp-recipient').value = id;
+  $('contact-status').textContent = `Контакт добавлен в получателя: ${id.slice(0, 16)}…`;
+  addStageLog('SMP контакт добавлен из текста', 'success');
+}
+
 async function refreshSmp() {
   const inbox = document.getElementById('smp-inbox');
   const list = document.getElementById('smp-list');
@@ -725,6 +749,9 @@ $('btn-ping').addEventListener('click', pingPeer);
 $('btn-chunks-refresh').addEventListener('click', refreshChunks);
 $('btn-smp-refresh').addEventListener('click', refreshSmp);
 $('btn-smp-send').addEventListener('click', sendSmp);
+// H1: QR-обмен контактами — payload "nexxus:<node_id hex>"
+$('btn-my-qr').addEventListener('click', showMyQr);
+$('btn-contact-add').addEventListener('click', addContactFromText);
 $('btn-por').addEventListener('click', runPor);
 // E2 versioning: именованные указатели с историей
 async function nameList() {

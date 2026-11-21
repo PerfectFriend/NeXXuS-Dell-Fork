@@ -173,6 +173,13 @@
           <div id="smp-inbox" class="smp-inbox" style="display:none">
             <h3>🧩 SMP inbox</h3>
             <div class="row-inline">
+              <button class="btn" id="btn-my-qr">📷 Мой QR-контакт</button>
+              <input id="contact-text" placeholder="nexxus:<node_id hex> — вставьте, чтобы добавить контакт" style="flex:1">
+              <button class="btn" id="btn-contact-add">➕ Из текста</button>
+            </div>
+            <canvas id="qr-canvas" width="220" height="220" style="display:none;image-rendering:pixelated"></canvas>
+            <div id="contact-status" class="muted"></div>
+            <div class="row-inline">
               <input id="smp-recipient" placeholder="recipient node_id (hex 64)">
               <input id="smp-recipient-pub" placeholder="recipient pubkey (ed25519 hex 64)">
             </div>
