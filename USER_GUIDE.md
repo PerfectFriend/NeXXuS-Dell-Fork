@@ -57,7 +57,10 @@ nexxusd            # слушает P2P 127.0.0.1:4001, Local API 127.0.0.1:4010
 - Cold backup: `node_export_bundle` / `node_import_bundle` (зашифрованный PIN-ом
   bundle вне redb, импорт с `confirm: true` и path только внутри `bundles/`)
 - Fleet: узлы в `~/.nexxus/nodes/<name>.conf` + `<name>.token`, переключение в UI монитора
-- SMP inbox: `node_smp` (история) + `node_smp_send` (seal X25519 + route), UI-панель inbox
+- SMP inbox & ContactLink: `node_smp` (история) + `node_smp_send` (seal X25519 + route), `node_contact_link` / `node_contact_parse` (Spec §7 deep links `nexxus://contact?...`), UI-панель inbox & QR
+- Sovereign Drive: автоматическая папка синхронизации `~/.nexxus/drive`, фоновый ingestion-цикл (`NEXXUS_SYNC_INTERVAL_SECS`, дефолт 300с), `nexxusd sync [path]` / `nexxusd sync status`, RPC `node_sync_scan` / `node_sync_status`, панель в UI
+- Mesh Rehydration (PROD-RESTORE-01): восстановление недостающих шардов по манифесту из роя пиров (`node_rehydrate_manifest`)
+- NAT Traversal: 100% связность узлов за CGNAT (мобильный 4G/5G, домашний Wi-Fi) через Tor v3 Rendezvous Points без открытых внешних портов
 - Self-update: `nexxusd update [--check]` — ed25519-подпись релиза, atomic replace + rollback
 
 ## Чего НЕТ (намеренно, не SIM)
@@ -98,3 +101,27 @@ nexxusd            # слушает P2P 127.0.0.1:4001, Local API 127.0.0.1:4010
 ### Windows: служба (WinSW) + firewall (E4/W2)
 - Релиз-ассет `nexxusd-windows-x86_64.exe` (mingw cross-build в CI) + `scripts/windows/` (install-service.ps1, uninstall-service.ps1, nexxus-service.xml) — тоже в релизе.
 - Установка админом: `irm .../scripts/windows/install-service.ps1 | iex` — качает nexxusd.exe и WinSW, регистрирует службу `NeXXuSNode` (auto-start, restart on failure), открывает firewall только для P2P-порта (4001); API 4010 остаётся loopback-only. Данные — ProgramData\NeXXuS.
+
+### Sovereign Drive: папка синхронизации (~/.nexxus/drive)
+- Локальная папка `~/.nexxus/drive` (или произвольный путь) автоматически сканируется демоном каждые `NEXXUS_SYNC_INTERVAL_SECS` секунд (дефолт 300с; 0 — автосинхронизация отключена).
+- Файлы прозрачно нарезаются на 16 KiB чанки, кодируются Reed-Solomon RS(4+2), шифруются per-file ключом и индексируются в redb (`sync_idx_<rel_path>`).
+- Ручной запуск и проверка статуса через CLI:
+  `nexxusd sync` — синхронизировать дефолтную папку;
+  `nexxusd sync /path/to/custom/drive` — синхронизировать указанную папку;
+  `nexxusd sync status` — проверить число и объем проиндексированных файлов.
+- В Tauri-мониторе (`nexxus-desktop`): панель «Хранилище → Sovereign Drive» с кнопкой «🔄 Синхронизировать сейчас» и списком синхронизированных файлов.
+
+### QR-контакты & ContactLink (Спецификация §7)
+- Единый стандарт обмена контактами для мобильных и десктопных нод:
+  `nexxus://contact?addr=<Bech32Address>&onion=<Torv3OnionAddress>&name=<Alias>&fp=<Fingerprint>`
+- Генерация ссылки/QR: RPC-метод `node_contact_link`, кнопка «📷 Мой QR-контакт (Spec §7)» в SMP-панели монитора.
+- Импорт контакта: RPC-метод `node_contact_parse`, поле «➕ Добавить контакт» — автоматически извлекает адрес получателя, Tor v3 onion и фингерпринт ключа для сквозного шифрования (E2EE) без ручного ввода hex-строк.
+
+### Mesh Rehydration Engine (PROD-RESTORE-01)
+- Восстановление недостающих шардов по Merkle-манифесту из распределенного роя:
+  RPC `node_rehydrate_manifest {"root": "<manifest_root_hex>"}`.
+- Узел обходит всех подключенных P2P-пиров, запрашивая недостающие шарды (RS 4+2), верифицирует SHA-256 хеш каждого полученного шарда и сохраняет в локальный CAS-стор. Для восстановления файла достаточно любых 4 шардов из 6.
+
+### NAT Traversal & Onion Rendezvous Points
+- Ноды за строгим мобильным CGNAT (4G/5G, мобильный интернет) или домашними роутерами без статического белого IP автоматически обеспечивают входящую и исходящую связность при `NEXXUS_TOR=1`.
+- Скрытые службы Tor v3 (Onion Services) используют распределенные Rendezvous Points сети Tor: соединение двух нод за NAT устанавливается через виртуальную точку рандеву, исключая необходимость в открытии внешних портов (Port Forwarding / UPnP) и полностью скрывая реальные физические IP-адреса участников.

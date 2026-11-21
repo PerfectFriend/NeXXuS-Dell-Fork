@@ -227,6 +227,7 @@ Ready-to-install distributions are available in `public/packages/`:
 | `nexxusd test-interhost <IP:PORT>` | Run full 6-phase P2P inter-host diagnostic validation | `nexxusd test-interhost 192.168.1.50:3999` |
 | `nexxusd upload <file>` | Slices local file into 16KB chunks, applies RS(4+2), and disperses | `nexxusd upload /path/to/archive.tar.gz` |
 | `nexxusd download <hash> <out>` | Fetches shards from swarm, recovers via RS, and decrypts | `nexxusd download <sha256> /tmp/restored.bin` |
+| `nexxusd sync [path]` | Scan Sovereign Drive folder, slice, encode into RS(4+2), and index | `nexxusd sync` or `nexxusd sync status` |
 | `nexxusd logs [-n N]` | View structured operation log entries | `nexxusd logs -n 50` |
 | `nexxusd benchmark` | Test local NVMe read/write speed and Merkle tree calculation | `nexxusd benchmark` |
 
