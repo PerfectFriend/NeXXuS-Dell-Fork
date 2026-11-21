@@ -36,6 +36,7 @@ pub const COMMANDS: &[&str] = &[
     "peer",
     "upload",
     "download",
+    "sync",
     "test-por",
     "test-interhost",
     "logs",
@@ -387,6 +388,25 @@ async fn async_main(args: Vec<String>) -> i32 {
             _ => {
                 eprintln!("usage: nexxusd download <root-hex> <out-file>");
                 2
+            }
+        },
+        "sync" => match rest.first().map(|s| s.as_str()) {
+            Some("status") => {
+                let path = rest.get(1);
+                let params = if let Some(p) = path {
+                    let abs = std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p));
+                    json!({ "path": abs.display().to_string() })
+                } else {
+                    json!({})
+                };
+                print_result(ws_call("node_sync_status", params).await)
+            }
+            Some(path) => {
+                let abs = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+                print_result(ws_call("node_sync_scan", json!({ "path": abs.display().to_string() })).await)
+            }
+            None => {
+                print_result(ws_call("node_sync_scan", json!({})).await)
             }
         },
         "test-por" => print_result(ws_call("node_por", json!({})).await),

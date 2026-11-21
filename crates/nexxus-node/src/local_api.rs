@@ -481,6 +481,8 @@ impl LocalApi {
             "node_dial_onion" => self.handle_node_dial_onion(req.params).await,
             "node_upload" => self.handle_node_upload(req.params).await,
             "node_download" => self.handle_node_download(req.params).await,
+            "node_sync_scan" => self.handle_node_sync_scan(req.params).await,
+            "node_sync_status" => self.handle_node_sync_status(req.params),
             "node_por" => self.handle_node_por().await,
             "node_audit_peer" => self.handle_node_audit_peer(req.params).await,
             "node_test_interhost" => self.handle_node_test_interhost(req.params).await,
@@ -1773,6 +1775,27 @@ impl LocalApi {
         crate::vault::download_file(&self.network, self.network.store(), &root, std::path::Path::new(&out)).await
     }
 
+    async fn handle_node_sync_scan(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let drive_dir = if let Some(p) = params.as_ref().and_then(|p| p.get("path")).and_then(|v| v.as_str()) {
+            std::path::PathBuf::from(p)
+        } else {
+            crate::sync::default_drive_dir()
+        };
+        let engine = crate::sync::SyncEngine::new(drive_dir, self.store.clone(), self.network.clone());
+        let rep = engine.scan_and_sync().await?;
+        serde_json::to_value(&rep).map_err(|e| NexxusError::Io(e.to_string()))
+    }
+
+    fn handle_node_sync_status(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let drive_dir = if let Some(p) = params.as_ref().and_then(|p| p.get("path")).and_then(|v| v.as_str()) {
+            std::path::PathBuf::from(p)
+        } else {
+            crate::sync::default_drive_dir()
+        };
+        let engine = crate::sync::SyncEngine::new(drive_dir, self.store.clone(), self.network.clone());
+        engine.status()
+    }
+
     async fn handle_node_por(&self) -> Result<Value, NexxusError> {
         crate::vault::run_por(self.network.store())
     }
@@ -2121,5 +2144,43 @@ mod tests {
         assert_eq!(parsed.name, "TestNode");
         assert_eq!(parsed.onion, "25njqamcweflpvkl73j4szahhihoc4xt3ktcgjnpaingr5yhkenjpzad.onion");
         assert_eq!(parsed.to_uri(), uri);
+    }
+
+    #[tokio::test]
+    async fn sync_api_scan_and_status_roundtrip() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let store_path = dir.path().join("store.redb");
+        let store = Arc::new(ChunkStore::open(&store_path).unwrap());
+        let net = Arc::new(P2pNetwork::new(
+            NodeId([0x42; 32]),
+            "127.0.0.1:0".parse().unwrap(),
+            store.clone(),
+        ));
+        let api = LocalApi::new(net.clone(), store.clone());
+
+        let drive = dir.path().join("test_drive");
+        std::fs::create_dir_all(&drive).unwrap();
+        std::fs::write(drive.join("doc.txt"), b"Sovereign Drive sync content").unwrap();
+
+        let req_scan = req(
+            "node_sync_scan",
+            Some(serde_json::json!({ "path": drive.display().to_string() })),
+        );
+        let resp_scan = api.handle_request(req_scan).await;
+        assert_eq!(resp_code(&resp_scan), 0);
+        let res = resp_scan.result.unwrap();
+        assert_eq!(res["scanned_files"], 1);
+        assert_eq!(res["newly_synced"], 1);
+
+        let req_status = req(
+            "node_sync_status",
+            Some(serde_json::json!({ "path": drive.display().to_string() })),
+        );
+        let resp_status = api.handle_request(req_status).await;
+        assert_eq!(resp_code(&resp_status), 0);
+        let res2 = resp_status.result.unwrap();
+        assert_eq!(res2["synced_files_count"], 1);
+        assert_eq!(res2["files"][0]["relative_path"], "doc.txt");
     }
 }

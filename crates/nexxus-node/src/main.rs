@@ -35,6 +35,7 @@ mod logging;
 mod bootstrap;
 mod node_config;
 mod iou_journal;
+mod sync;
 
 use crate::net::P2pNetwork;
 use crate::storage::ChunkStore;
@@ -581,6 +582,36 @@ fn main() {
             }
         });
 
+        // --- Phase 2: Sovereign Drive background sync loop ---
+        let sync_interval_secs: u64 = crate::node_config::cfg_or_env(&conf, "sync_interval_secs", "NEXXUS_SYNC_INTERVAL_SECS", "300")
+            .parse()
+            .unwrap_or(300);
+        let sync_store = Arc::clone(&store);
+        let sync_net = Arc::clone(&net);
+        let sync_task = tokio::spawn(async move {
+            if sync_interval_secs == 0 {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                }
+            }
+            let drive_dir = crate::sync::default_drive_dir();
+            let engine = crate::sync::SyncEngine::new(drive_dir, sync_store, sync_net);
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(sync_interval_secs)).await;
+                if let Ok(rep) = engine.scan_and_sync().await {
+                    if rep.newly_synced > 0 {
+                        crate::log_ev!(
+                            "info",
+                            "sync.synced",
+                            "newly_synced" => rep.newly_synced,
+                            "scanned" => rep.scanned_files,
+                            "bytes" => rep.total_bytes
+                        );
+                    }
+                }
+            }
+        });
+
         // --- Обработка сигналов завершения ---
         // Корректно завершаем по SIGINT (Ctrl+C) или SIGTERM.
         // H-11: tokio::signal::unix не существует на Windows — там только ctrl_c.
@@ -607,6 +638,9 @@ fn main() {
             _ = por_task => {
                 eprintln!("nexxusd: PoR audit task exited");
             }
+            _ = sync_task => {
+                eprintln!("nexxusd: sync task exited");
+            }
             _ = sigint.recv() => {
                 eprintln!("nexxusd: received SIGINT, shutting down");
             }
@@ -627,6 +661,9 @@ fn main() {
             }
             _ = por_task => {
                 eprintln!("nexxusd: PoR audit task exited");
+            }
+            _ = sync_task => {
+                eprintln!("nexxusd: sync task exited");
             }
             _ = tokio::signal::ctrl_c() => {
                 eprintln!("nexxusd: received Ctrl+C, shutting down");
