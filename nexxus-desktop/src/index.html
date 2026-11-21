@@ -156,6 +156,7 @@
           <h2>Хранилище</h2>
           <div class="controls-row">
             <button class="btn btn-outline" id="btn-chunks-refresh">📦 Чанки</button>
+            <button class="btn btn-outline" id="btn-sync-refresh">📁 Sovereign Drive</button>
             <button class="btn btn-outline" id="btn-smp-refresh">🧩 SMP inbox</button>
             <button class="btn btn-outline" id="btn-por">🔍 PoR-проверка</button>
             <button class="btn btn-outline" id="btn-store-info">🗄 Инфо о сторе</button>
@@ -170,12 +171,20 @@
           </div>
           <div id="names-data" class="data-box" style="display:none">—</div>
           <div id="storage-data" class="data-box">—</div>
-          <div id="smp-inbox" class="smp-inbox" style="display:none">
-            <h3>🧩 SMP inbox</h3>
+          <div id="sync-panel" class="sync-panel" style="display:none">
+            <h3>📁 Sovereign Drive (~/.nexxus/drive)</h3>
             <div class="row-inline">
-              <button class="btn" id="btn-my-qr">📷 Мой QR-контакт</button>
-              <input id="contact-text" placeholder="nexxus:<node_id hex> — вставьте, чтобы добавить контакт" style="flex:1">
-              <button class="btn" id="btn-contact-add">➕ Из текста</button>
+              <button class="btn btn-primary" id="btn-sync-scan">🔄 Синхронизировать сейчас</button>
+              <span id="sync-summary" class="muted">—</span>
+            </div>
+            <div id="sync-files-list" class="data-box" style="margin-top:8px">—</div>
+          </div>
+          <div id="smp-inbox" class="smp-inbox" style="display:none">
+            <h3>🧩 SMP inbox & QR-контакты</h3>
+            <div class="row-inline">
+              <button class="btn" id="btn-my-qr">📷 Мой QR-контакт (Spec §7)</button>
+              <input id="contact-text" placeholder="nexxus://contact?... или nexxus:<hex>" style="flex:1">
+              <button class="btn" id="btn-contact-add">➕ Добавить контакт</button>
             </div>
             <canvas id="qr-canvas" width="220" height="220" style="display:none;image-rendering:pixelated"></canvas>
             <div id="contact-status" class="muted"></div>

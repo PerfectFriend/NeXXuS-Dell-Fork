@@ -412,6 +412,12 @@ async function connectPeer() {
 
 // --- Панель «Хранилище» ---
 async function refreshChunks() {
+  const syncP = document.getElementById('sync-panel');
+  if (syncP) syncP.style.display = 'none';
+  const inbox = document.getElementById('smp-inbox');
+  if (inbox) inbox.style.display = 'none';
+  const box = document.getElementById('storage-data');
+  if (box) box.style.display = '';
   try {
     const c = await api('node_chunks');
     setBox('storage-data', {
@@ -425,7 +431,57 @@ async function refreshChunks() {
   }
 }
 
-// H1: QR-контакт — единый payload "nexxus:<node_id hex 64>".
+// Phase 2: Sovereign Drive Sync Folder
+async function refreshSync() {
+  const panel = document.getElementById('sync-panel');
+  const box = document.getElementById('storage-data');
+  const smp = document.getElementById('smp-inbox');
+  const names = document.getElementById('names-data');
+  if (box) box.style.display = 'none';
+  if (smp) smp.style.display = 'none';
+  if (names) names.style.display = 'none';
+  if (panel) panel.style.display = '';
+
+  try {
+    const st = await api('node_sync_status', {});
+    const summary = document.getElementById('sync-summary');
+    const listEl = document.getElementById('sync-files-list');
+    if (summary) {
+      summary.textContent = `Папка: ${st.drive_path || '—'} | Файлов: ${st.synced_files_count || 0} (${formatBytes(st.total_bytes || 0)})`;
+    }
+    if (listEl) {
+      const files = st.files || [];
+      if (!files.length) {
+        listEl.innerHTML = '<div class="muted">В папке Sovereign Drive пока нет файлов. Поместите файлы в ~/.nexxus/drive и нажмите "Синхронизировать".</div>';
+      } else {
+        const rows = files.map(f => {
+          return `<div class="row-file" style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
+            <span>📄 <b>${f.relative_path}</b></span>
+            <span><code>${(f.root_hex || '').slice(0, 12)}…</code></span>
+            <span>${formatBytes(f.size_bytes)}</span>
+          </div>`;
+        }).join('');
+        listEl.innerHTML = rows;
+      }
+    }
+  } catch (e) {
+    const listEl = document.getElementById('sync-files-list');
+    if (listEl) listEl.innerHTML = `<div class="muted">Ошибка: ${e}</div>`;
+  }
+}
+
+async function scanSync() {
+  addStageLog('Синхронизация Sovereign Drive начата...', 'info');
+  try {
+    const r = await api('node_sync_scan', {});
+    addStageLog(`Синхронизация завершена: просканировано ${r.scanned_files}, новых ${r.newly_synced}`, 'success');
+    refreshSync();
+  } catch (e) {
+    addStageLog(`Ошибка синхронизации: ${e}`, 'error');
+  }
+}
+
+// Specification §7: QR Deep Link exchange standard (ContactLink)
 function contactPayload(nodeId) { return `nexxus:${nodeId}`; }
 function parseContact(text) {
   const t = (text || '').trim();
@@ -434,24 +490,55 @@ function parseContact(text) {
 }
 async function showMyQr() {
   const cv = $('qr-canvas');
+  try {
+    const link = await api('node_contact_link', { name: 'My NeXXus Node' });
+    if (link && link.uri) {
+      await QRCode.toCanvas(cv, link.uri, { width: 220, margin: 1, errorCorrectionLevel: 'M' });
+      cv.style.display = '';
+      $('contact-status').innerHTML = `<b>${link.name || 'NeXXus Node'}</b><br>URI: <code style="word-break:break-all">${link.uri}</code><br>Onion: <code>${link.onion}</code>`;
+      return;
+    }
+  } catch (_) {
+    // fallback
+  }
   const id = (state.nodeId || '').trim();
   if (!/^[0-9a-f]{64}$/i.test(id)) { $('contact-status').textContent = 'node_id ещё не получен — обновите статус.'; return; }
   await QRCode.toCanvas(cv, contactPayload(id), { width: 220, margin: 1, errorCorrectionLevel: 'M' });
   cv.style.display = '';
   $('contact-status').textContent = `Ваш контакт: ${contactPayload(id)}`;
 }
-function addContactFromText() {
-  const id = parseContact($('contact-text').value);
-  if (!id) { $('contact-status').textContent = 'Формат: nexxus:<64 hex node_id>'; return; }
+async function addContactFromText() {
+  const raw = ($('contact-text').value || '').trim();
+  if (!raw) { $('contact-status').textContent = 'Введите URI контакта или hex node_id'; return; }
+  try {
+    const parsed = await api('node_contact_parse', { uri: raw });
+    if (parsed && parsed.addr) {
+      $('smp-recipient').value = parsed.addr;
+      if (parsed.fingerprint) {
+        $('smp-recipient-pub').value = parsed.fingerprint;
+      }
+      $('contact-status').textContent = `Контакт добавлен: ${parsed.name} (${parsed.addr.slice(0, 16)}…) [${parsed.onion}]`;
+      addStageLog(`Контакт ${parsed.name} добавлен`, 'success');
+      return;
+    }
+  } catch (_) {
+    // fallback
+  }
+  const id = parseContact(raw);
+  if (!id) { $('contact-status').textContent = 'Формат: nexxus://contact?... или nexxus:<64 hex node_id>'; return; }
   $('smp-recipient').value = id;
   $('contact-status').textContent = `Контакт добавлен в получателя: ${id.slice(0, 16)}…`;
   addStageLog('SMP контакт добавлен из текста', 'success');
 }
 
 async function refreshSmp() {
+  const syncP = document.getElementById('sync-panel');
+  if (syncP) syncP.style.display = 'none';
   const inbox = document.getElementById('smp-inbox');
   const list = document.getElementById('smp-list');
   const box = document.getElementById('storage-data');
+  const names = document.getElementById('names-data');
+  if (names) names.style.display = 'none';
   try {
     const s = await api('node_smp');
     const msgs = s.messages || [];
@@ -747,6 +834,8 @@ $('btn-connect').addEventListener('click', connectPeer);
 $('btn-ping').addEventListener('click', pingPeer);
 
 $('btn-chunks-refresh').addEventListener('click', refreshChunks);
+$('btn-sync-refresh').addEventListener('click', refreshSync);
+$('btn-sync-scan').addEventListener('click', scanSync);
 $('btn-smp-refresh').addEventListener('click', refreshSmp);
 $('btn-smp-send').addEventListener('click', sendSmp);
 // H1: QR-обмен контактами — payload "nexxus:<node_id hex>"
