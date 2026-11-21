@@ -34,6 +34,7 @@ mod update;
 mod logging;
 mod bootstrap;
 mod node_config;
+mod iou_journal;
 
 use crate::net::P2pNetwork;
 use crate::storage::ChunkStore;
@@ -235,6 +236,23 @@ fn main() {
             eprintln!("nexxusd: identity load failed: {e}");
             process::exit(1);
         });
+
+        // ADR-0009 §3: append-only IOU journal рядом со стором, загрузка при старте.
+        let store_dir = std::path::Path::new(&path).parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
+        let iou_journal = match iou_journal::IouJournal::open(&store_dir) {
+            Ok(j) => {
+                match j.load() {
+                    Ok((ious, _seen, bad)) => log_ev!("info", "iou.journal.loaded", "count" => ious.len(), "bad_lines" => bad),
+                    Err(e) => log_ev!("error", "iou.journal.load_fail", "err" => e.to_string()),
+                }
+                Some(j)
+            }
+            Err(e) => {
+                log_ev!("error", "iou.journal.open_fail", "err" => e.to_string());
+                None
+            }
+        };
+        let _ = &iou_journal; // транспорт (SMP/local API) подключается отдельным ADR
         if let Some(phrase) = &fresh_mnemonic {
             // C-5: мнемоника НЕ печатается в лог/stderr (попадёт в journal и
             // лог-файлы). Пишется один раз в файл рядом со стором с правами
