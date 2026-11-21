@@ -198,6 +198,70 @@ pub async fn download_file(
     }))
 }
 
+/// PROD-RESTORE-01 / Phase 2: Rehydrate missing shards for a manifest from connected peers in the mesh.
+pub async fn rehydrate_manifest_from_mesh(
+    net: &P2pNetwork,
+    store: &ChunkStore,
+    manifest: &Value,
+) -> Result<Value, NexxusError> {
+    let root_hex = manifest["root"].as_str().unwrap_or("unknown");
+    let chunk_list = manifest["chunks"].as_array().cloned().unwrap_or_default();
+    let peers = net.known_peers().await;
+
+    let mut total_shards = 0usize;
+    let mut already_local = 0usize;
+    let mut fetched_count = 0usize;
+    let mut missing_count = 0usize;
+
+    for chunk in &chunk_list {
+        let shard_hexes = chunk["shard_hashes"].as_array().cloned().unwrap_or_default();
+        for h_val in shard_hexes {
+            total_shards += 1;
+            let Some(h_str) = h_val.as_str() else { continue; };
+            let Ok(bytes) = hex::decode(h_str) else { continue; };
+            let Ok(arr) = <[u8; 32]>::try_from(bytes) else { continue; };
+            let hash = ChunkHash(arr);
+
+            if store.get_chunk(&hash)?.is_some() {
+                already_local += 1;
+                continue;
+            }
+
+            let mut fetched_shard = None;
+            for p in &peers {
+                if let Ok(d) = net.fetch_chunk_from_peer(p.addr, hash).await {
+                    fetched_shard = Some(d);
+                    break;
+                }
+            }
+
+            if let Some(data) = fetched_shard {
+                store.put_chunk(&hash, &data)?;
+                fetched_count += 1;
+            } else {
+                missing_count += 1;
+            }
+        }
+    }
+
+    let present_total = already_local + fetched_count;
+    let progress_pct = if total_shards == 0 {
+        100.0
+    } else {
+        (present_total as f64 / total_shards as f64) * 100.0
+    };
+
+    Ok(json!({
+        "root": root_hex,
+        "total_shards": total_shards,
+        "already_local": already_local,
+        "fetched": fetched_count,
+        "missing": missing_count,
+        "progress_pct": (progress_pct * 10.0).round() / 10.0,
+        "peers_consulted": peers.len(),
+    }))
+}
+
 /// Local Proof-of-Retrievability benchmark over a stored (or synthetic) chunk.
 pub fn run_por(store: &ChunkStore) -> Result<Value, NexxusError> {
     let t0 = Instant::now();
@@ -346,6 +410,60 @@ mod tests {
 
         server_a.abort();
         server_b.abort();
+    }
+
+    #[tokio::test]
+    async fn rehydrate_missing_shards_from_mesh_recovers_all() {
+        // PROD-RESTORE-01 / Phase 2: Fresh node with empty store imports manifest
+        // and rehydrates all missing shards from the P2P mesh, achieving 100% restore.
+        let (net_a, addr_a, server_a) = spawn(0x11).await;
+        let (net_b, addr_b, server_b) = spawn(0x22).await;
+        let (net_c, _addr_c, server_c) = spawn(0x33).await;
+
+        net_a.send_node_announce(addr_b).await.unwrap();
+        net_b.send_node_announce(addr_a).await.unwrap();
+
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("source.bin");
+        // 16KB fits in 1 chunk (6 shards total) to stay within per-test NET-01 IP rate limit
+        let data: Vec<u8> = (0..16_000u32).map(|i| ((i * 31 + 7) % 256) as u8).collect();
+        std::fs::write(&file, &data).unwrap();
+
+        let up = upload_file(&net_a, net_a.store(), &file).await.unwrap();
+        let root = up["root"].as_str().unwrap().to_string();
+
+        // Fresh node C knows peer A and peer B
+        net_c.send_node_announce(addr_a).await.unwrap();
+        net_c.send_node_announce(addr_b).await.unwrap();
+
+        // Manifest is imported into C's meta
+        let key = format!("manifest_{root}");
+        let manifest_bytes = net_a.store().get_meta(&key).unwrap().unwrap();
+        let manifest_val: Value = serde_json::from_slice(&manifest_bytes).unwrap();
+        net_c.store().put_meta(&key, &manifest_bytes).unwrap();
+
+        // Node C has 0 shards initially
+        assert_eq!(net_c.store().list_chunk_hashes().unwrap().len(), 0);
+
+        // Rehydrate from mesh
+        let rep = rehydrate_manifest_from_mesh(&net_c, net_c.store(), &manifest_val)
+            .await
+            .unwrap();
+
+        assert_eq!(rep["already_local"], 0);
+        assert!(rep["fetched"].as_u64().unwrap() > 0);
+        assert_eq!(rep["missing"], 0);
+        assert_eq!(rep["progress_pct"], 100.0);
+
+        // Verify file can now be reconstructed from C's rehydrated store
+        let out = dir.path().join("rehydrated.bin");
+        let dl = download_file(&net_c, net_c.store(), &root, &out).await.unwrap();
+        assert_eq!(dl["bytes"].as_u64().unwrap() as usize, data.len());
+        assert_eq!(std::fs::read(&out).unwrap(), data, "bit-identical mesh rehydration");
+
+        server_a.abort();
+        server_b.abort();
+        server_c.abort();
     }
 
     #[test]

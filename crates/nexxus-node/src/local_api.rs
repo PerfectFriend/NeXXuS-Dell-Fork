@@ -454,6 +454,7 @@ impl LocalApi {
             "node_name_set" => self.handle_node_name_set(req.params),
             "node_name_get" => self.handle_node_name_get(req.params),
             "node_manifest_get" => self.handle_node_manifest_get(req.params),
+            "node_rehydrate_manifest" => self.handle_node_rehydrate_manifest(req.params).await,
             "node_name_history" => self.handle_node_name_history(req.params),
             "node_name_list" => self.handle_node_name_list(),
             "node_bootstrap_set" => self.handle_node_bootstrap_set(req.params),
@@ -1143,6 +1144,25 @@ impl LocalApi {
             .ok_or_else(|| NexxusError::Io(format!("no manifest for root {root}")))?;
         serde_json::from_slice(&raw)
             .map_err(|e| NexxusError::Io(format!("bad manifest json: {e}")))
+    }
+
+    /// PROD-RESTORE-01 / Phase 2: Дотянуть недостающие шарды манифеста из Mesh-сети.
+    async fn handle_node_rehydrate_manifest(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let p = params.ok_or_else(|| NexxusError::Io("params required (root or manifest)".into()))?;
+        let manifest = if let Some(root) = p.get("root").and_then(|v| v.as_str()) {
+            let raw = self
+                .store
+                .get_meta(&format!("manifest_{root}"))?
+                .ok_or_else(|| NexxusError::Io(format!("no local manifest for root {root}")))?;
+            serde_json::from_slice(&raw)
+                .map_err(|e| NexxusError::Io(format!("bad manifest json: {e}")))?
+        } else if p.get("chunks").is_some() {
+            p
+        } else {
+            return Err(NexxusError::Io("param 'root' or 'manifest' required".into()));
+        };
+
+        crate::vault::rehydrate_manifest_from_mesh(&self.network, &self.store, &manifest).await
     }
 
     /// E2 versioning: список всех имён.
