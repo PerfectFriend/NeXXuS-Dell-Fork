@@ -239,10 +239,14 @@ fn main() {
 
         // ADR-0009 §3: append-only IOU journal рядом со стором, загрузка при старте.
         let store_dir = std::path::Path::new(&path).parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
+        let mut iou_seen = std::collections::HashSet::new();
         let iou_journal = match iou_journal::IouJournal::open(&store_dir) {
             Ok(j) => {
                 match j.load() {
-                    Ok((ious, _seen, bad)) => log_ev!("info", "iou.journal.loaded", "count" => ious.len(), "bad_lines" => bad),
+                    Ok((ious, seen, bad)) => {
+                        log_ev!("info", "iou.journal.loaded", "count" => ious.len(), "bad_lines" => bad);
+                        iou_seen = seen;
+                    }
                     Err(e) => log_ev!("error", "iou.journal.load_fail", "err" => e.to_string()),
                 }
                 Some(j)
@@ -252,7 +256,6 @@ fn main() {
                 None
             }
         };
-        let _ = &iou_journal; // транспорт (SMP/local API) подключается отдельным ADR
         if let Some(phrase) = &fresh_mnemonic {
             // C-5: мнемоника НЕ печатается в лог/stderr (попадёт в journal и
             // лог-файлы). Пишется один раз в файл рядом со стором с правами
@@ -312,6 +315,9 @@ fn main() {
 
         // --- Локальное WebSocket API ---
         let api = Arc::new(LocalApi::new(Arc::clone(&net), Arc::clone(&store)));
+        if let Some(j) = iou_journal {
+            api.set_iou_journal(j, iou_seen);
+        }
 
         // BS-01: опциональный pin registry_pub для signed bootstrap-списков
         // (node.conf: bootstrap_registry_pub / env: NEXXUS_BOOTSTRAP_REGISTRY_PUB).

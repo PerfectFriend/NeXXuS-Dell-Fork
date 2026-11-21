@@ -198,6 +198,9 @@ pub struct LocalApi {
     /// BS-01: опциональный pin ожидаемого registry_pub (hex) для bootstrap-списков.
     /// Если задан — envelope с другим registry_pub отклоняется (trust-on-first-use закрыт).
     bootstrap_registry_pin: std::sync::Mutex<Option<String>>,
+    /// ADR-0009: IOU journal + anti-replay set (подключается из main после open).
+    iou_journal: std::sync::Mutex<Option<crate::iou_journal::IouJournal>>,
+    iou_seen: std::sync::Mutex<crate::iou_journal::Seen>,
 }
 
 /// JSON-RPC error code: не пройдена аутентификация.
@@ -316,6 +319,8 @@ impl LocalApi {
             duress_wipe: std::sync::atomic::AtomicBool::new(false),
             ws_conns: std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_WS_CONNECTIONS)),
             bootstrap_registry_pin: std::sync::Mutex::new(None),
+            iou_journal: std::sync::Mutex::new(None),
+            iou_seen: std::sync::Mutex::new(std::collections::HashSet::new()),
             epoch_info: Arc::new(Mutex::new(EpochInfo {
                 epoch_number: 0,
                 merkle_root: hex::encode([0u8; 32]),
@@ -333,6 +338,12 @@ impl LocalApi {
             #[cfg(feature = "tor")]
             tor_session: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// ADR-0009: подключить IOU journal (вызывается из main после открытия стора).
+    pub fn set_iou_journal(&self, j: crate::iou_journal::IouJournal, seen: crate::iou_journal::Seen) {
+        *self.iou_seen.lock().unwrap() = seen;
+        *self.iou_journal.lock().unwrap() = Some(j);
     }
 
     /// Register a connected peer (called from handle_connection).
@@ -487,11 +498,79 @@ impl LocalApi {
             "node_doctor" => self.handle_node_doctor(),
             "node_econ" => self.handle_node_econ(),
             "node_econ_export" => self.handle_node_econ_export().await,
+            "iou_issue" => self.handle_iou_issue(req.params),
+            "iou_list" => self.handle_iou_list(),
+            "iou_balance" => self.handle_iou_balance(req.params),
+            "iou_redeem" => self.handle_iou_redeem(req.params),
             _ => return error_response(id, ERR_METHOD_NOT_FOUND, format!("method '{}' not found", req.method)),
         };
         match result {
             Ok(v) => ok_response(id, v),
             Err(e) => error_response(id, ERR_INTERNAL_ERROR, e.to_string()),
+        }
+    }
+
+    // --- ADR-0009: IOU (off-chain signed, local journal) ---
+
+    fn iou_journal_ref(&self) -> Result<std::sync::MutexGuard<'_, Option<crate::iou_journal::IouJournal>>, NexxusError> {
+        self.iou_journal.lock().map_err(|_| NexxusError::Io("iou journal lock poisoned".into()))
+    }
+
+    fn parse_node_id_param(params: Option<Value>, key: &str) -> Result<NodeId, NexxusError> {
+        let s = params.as_ref().and_then(|p| p.get(key)).and_then(|v| v.as_str())
+            .ok_or_else(|| NexxusError::Io(format!("param '{key}' (64 hex) required")))?;
+        let b = hex::decode(s).map_err(|e| NexxusError::Io(format!("param '{key}' not hex: {e}")))?;
+        let arr: [u8; 32] = b.try_into().map_err(|_| NexxusError::Io(format!("param '{key}' must be 64 hex chars")))?;
+        Ok(NodeId(arr))
+    }
+
+    /// Выписать IOU: мы — debtor, подписываем своим identity.
+    fn handle_iou_issue(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let creditor = Self::parse_node_id_param(params.clone(), "creditor")?;
+        let amount_micro = params.as_ref().and_then(|p| p.get("amount_micro")).and_then(|v| v.as_i64())
+            .ok_or_else(|| NexxusError::Io("param 'amount_micro' (i64) required".into()))?;
+        let epoch = params.as_ref().and_then(|p| p.get("epoch")).and_then(|v| v.as_u64())
+            .unwrap_or_else(|| self.epoch_info.try_lock().map(|e| e.epoch_number).unwrap_or(0));
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_err(|e| NexxusError::Io(e.to_string()))?.as_secs();
+        let nonce: [u8; 32] = rand::random();
+        let iou = nexxus_econ::iou::Iou::new(self.network.identity(), creditor, nexxus_core::types::Money(amount_micro), epoch, nonce, now)
+            .map_err(|e| NexxusError::Io(format!("iou issue: {e}")))?;
+        Ok(serde_json::json!({"iou": iou.to_json(), "debtor": hex::encode(self.network.node_id().0), "debtor_pubkey": hex::encode(self.network.identity_pubkey())}))
+    }
+
+    fn handle_iou_list(&self) -> Result<Value, NexxusError> {
+        let guard = self.iou_journal_ref()?;
+        let j = guard.as_ref().ok_or_else(|| NexxusError::Io("iou journal not initialized".into()))?;
+        let (ious, _seen, bad) = j.load().map_err(|e| NexxusError::Io(e.to_string()))?;
+        Ok(serde_json::json!({"ious": ious.iter().map(|i| i.to_json()).collect::<Vec<_>>(), "bad_lines": bad}))
+    }
+
+    fn handle_iou_balance(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let creditor = Self::parse_node_id_param(params, "creditor")?;
+        let guard = self.iou_journal_ref()?;
+        let j = guard.as_ref().ok_or_else(|| NexxusError::Io("iou journal not initialized".into()))?;
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_err(|e| NexxusError::Io(e.to_string()))?.as_secs();
+        let bal = j.balance_owed(&creditor, now).map_err(|e| NexxusError::Io(e.to_string()))?;
+        Ok(serde_json::json!({"creditor": hex::encode(creditor.0), "owed_micro": bal}))
+    }
+
+    /// Redeem: принимаем IOU от должника, верифицируем подпись по его pubkey, append в journal (anti-replay).
+    fn handle_iou_redeem(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let iou_str = params.as_ref().and_then(|p| p.get("iou")).and_then(|v| v.as_str())
+            .ok_or_else(|| NexxusError::Io("param 'iou' (json string) required".into()))?;
+        let pk_hex = params.as_ref().and_then(|p| p.get("debtor_pubkey")).and_then(|v| v.as_str())
+            .ok_or_else(|| NexxusError::Io("param 'debtor_pubkey' (64 hex) required".into()))?;
+        let pk_b = hex::decode(pk_hex).map_err(|e| NexxusError::Io(format!("debtor_pubkey not hex: {e}")))?;
+        let pk: [u8; 32] = pk_b.try_into().map_err(|_| NexxusError::Io("debtor_pubkey must be 64 hex chars".into()))?;
+        let iou = nexxus_econ::iou::Iou::from_json(iou_str).map_err(|e| NexxusError::Io(format!("iou parse: {e}")))?;
+        let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_err(|e| NexxusError::Io(e.to_string()))?.as_secs();
+        iou.verify(&pk, now).map_err(|e| NexxusError::Io(format!("iou verify: {e}")))?;
+        let guard = self.iou_journal_ref()?;
+        let j = guard.as_ref().ok_or_else(|| NexxusError::Io("iou journal not initialized".into()))?;
+        let mut seen = self.iou_seen.lock().map_err(|_| NexxusError::Io("iou seen lock poisoned".into()))?;
+        match j.append(&iou, &mut seen) {
+            Ok(()) => Ok(serde_json::json!({"ok": true, "debtor": hex::encode(iou.debtor.0), "amount_micro": iou.amount_micro})),
+            Err(e) => Err(NexxusError::Io(format!("iou redeem: {e}"))),
         }
     }
 
