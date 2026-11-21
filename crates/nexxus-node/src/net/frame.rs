@@ -48,6 +48,16 @@ pub async fn recv_frame_rl<S: AsyncRead + AsyncWrite + Unpin + Send>(
     stream: &mut S,
     rl: &crate::net::ratelimit::RateLimit,
 ) -> Result<(Opcode, u32, Vec<u8>, [u8; 64]), NexxusError> {
+    recv_frame_rl2(stream, rl, &crate::net::ratelimit::RateLimit::default()).await
+}
+
+/// H-8: like `recv_frame_rl`, but charges the per-connection bucket `conn`
+/// in addition to the global `rl` (waits the longer of the two).
+pub async fn recv_frame_rl2<S: AsyncRead + AsyncWrite + Unpin + Send>(
+    stream: &mut S,
+    rl: &crate::net::ratelimit::RateLimit,
+    conn: &crate::net::ratelimit::RateLimit,
+) -> Result<(Opcode, u32, Vec<u8>, [u8; 64]), NexxusError> {
     let mut len_buf = [0u8; LEN_LEN];
     stream
         .read_exact(&mut len_buf)
@@ -60,9 +70,7 @@ pub async fn recv_frame_rl<S: AsyncRead + AsyncWrite + Unpin + Send>(
             "frame too large: {len} > {MAX_FRAME_LEN}"
         )));
     }
-    if let Some(b) = &rl.down {
-        b.wait(len).await;
-    }
+    rl.wait_down2(conn, len).await;
     let mut frame = vec![0u8; len];
     stream
         .read_exact(&mut frame)

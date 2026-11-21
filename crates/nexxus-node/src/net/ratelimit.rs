@@ -74,6 +74,26 @@ impl RateLimit {
         }
     }
 
+    /// H-8: per-connection inbound cap (0 = unlimited). Default 4096 kbps so a
+    /// single peer cannot starve the others; global caps stay separate.
+    pub fn conn_from_config() -> Self {
+        let conf = crate::node_config::load_file();
+        let v = crate::node_config::cfg_or_env(&conf, "conn_max_down_kbps", "NEXXUS_CONN_MAX_DOWN_KBPS", "4096");
+        let kbps = v.trim().parse::<u64>().unwrap_or(4096);
+        Self::new(0, kbps)
+    }
+
+    /// Charge `bytes` against both this (global) and `conn` (per-connection)
+    /// down buckets; wait the longer of the two.
+    pub async fn wait_down2(&self, conn: &RateLimit, bytes: usize) {
+        let w1 = self.down.as_ref().map(|b| b.charge(bytes)).unwrap_or(0.0);
+        let w2 = conn.down.as_ref().map(|b| b.charge(bytes)).unwrap_or(0.0);
+        let w = w1.max(w2);
+        if w > 0.0 {
+            tokio::time::sleep(std::time::Duration::from_secs_f64(w)).await;
+        }
+    }
+
     /// Read caps from node.conf / env (0 = unlimited).
     pub fn from_config() -> Self {
         let conf = crate::node_config::load_file();
@@ -94,6 +114,21 @@ mod tests {
         assert_eq!(b.charge(1024), 0.0, "first second is free (burst)");
         let w = b.charge(1024);
         assert!(w > 0.9 && w <= 1.0, "next 1024B must wait ~1s, got {w}");
+    }
+
+    #[tokio::test]
+    async fn wait_down2_waits_the_longer_bucket() {
+        let global = RateLimit::new(0, 1024); // 1 MiB/s — не душит
+        let conn = RateLimit::new(0, 1); // 1 KiB/s — душит
+        // первый кадр проходит burst обоих
+        let t0 = std::time::Instant::now();
+        global.wait_down2(&conn, 1024).await;
+        assert!(t0.elapsed().as_secs_f64() < 0.5, "burst не должен ждать");
+        // второй кадр ждёт по per-conn bucket (~1s)
+        let t0 = std::time::Instant::now();
+        global.wait_down2(&conn, 1024).await;
+        let e = t0.elapsed().as_secs_f64();
+        assert!(e > 0.9 && e < 2.0, "ожидание по conn bucket ~1s, got {e}");
     }
 
     #[tokio::test]

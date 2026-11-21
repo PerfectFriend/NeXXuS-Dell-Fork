@@ -114,6 +114,8 @@ pub struct P2pNetwork {
     peer_scores: Arc<std::sync::Mutex<HashMap<SocketAddr, PeerScore>>>,
     /// F1: bandwidth caps (token bucket) applied to all P2P frames.
     pub rate_limit: std::sync::RwLock<crate::net::ratelimit::RateLimit>,
+    /// H-8: per-connection inbound cap (шаблон, клонируется на соединение).
+    conn_rl: crate::net::ratelimit::RateLimit,
 }
 
 /// Per-IP connection bucket: active connections + timestamps of recent accepts.
@@ -149,6 +151,8 @@ pub struct Metrics {
     pub req_timeouts: AtomicU64,
     /// F1: суммарное время, проведённое в дросселе bandwidth cap (мс).
     pub rl_wait_ms: AtomicU64,
+    /// H-4: отправлено keepalive-ping'ов ( liveness established-соединений).
+    pub keepalives_sent: AtomicU64,
 }
 
 impl Metrics {
@@ -174,6 +178,7 @@ impl Metrics {
             "peers_evicted": self.peers_evicted.load(Ordering::Relaxed),
             "req_timeouts": self.req_timeouts.load(Ordering::Relaxed),
             "rl_wait_ms": self.rl_wait_ms.load(Ordering::Relaxed),
+            "keepalives_sent": self.keepalives_sent.load(Ordering::Relaxed),
         })
     }
 
@@ -247,6 +252,9 @@ pub const MAX_PEERS: usize = 64;
 /// из routing table (соединение не рвётся), чтобы освободить место новому.
 pub const EVICT_SCORE_THRESHOLD: u64 = 40;
 pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+/// H-4: keepalive-ping на established соединении; обнаруживает мёртвых пиров
+/// по ошибке записи вместо долгого висения на idle timeout.
+pub const KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl P2pNetwork {
     /// Create a new node with a fresh Ed25519 identity and X25519 key pair.
@@ -289,6 +297,7 @@ impl P2pNetwork {
             metrics: Arc::new(Metrics::default()),
             peer_scores: Arc::new(std::sync::Mutex::new(HashMap::new())),
             rate_limit: std::sync::RwLock::new(crate::net::ratelimit::RateLimit::NONE),
+            conn_rl: crate::net::ratelimit::RateLimit::NONE,
         }
     }
 
@@ -334,6 +343,7 @@ impl P2pNetwork {
             metrics: Arc::new(Metrics::default()),
             peer_scores: Arc::new(std::sync::Mutex::new(HashMap::new())),
             rate_limit: std::sync::RwLock::new(crate::net::ratelimit::RateLimit::from_config()),
+            conn_rl: crate::net::ratelimit::RateLimit::conn_from_config(),
         }
     }
 
@@ -431,7 +441,7 @@ impl P2pNetwork {
 
     /// E1: record a served-request outcome for a peer (score input).
     pub fn note_peer_result(&self, addr: SocketAddr, ok: bool) {
-        let mut scores = self.peer_scores.lock().unwrap();
+        let mut scores = self.peer_scores.lock().unwrap_or_else(|e| e.into_inner());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -461,7 +471,7 @@ impl P2pNetwork {
     /// E1: record measured RTT for a peer (EWMA, alpha=1/4).
     pub fn note_peer_rtt(&self, addr: SocketAddr, rtt: std::time::Duration) {
         let ms = rtt.as_millis() as u64;
-        let mut scores = self.peer_scores.lock().unwrap();
+        let mut scores = self.peer_scores.lock().unwrap_or_else(|e| e.into_inner());
         let e = scores.entry(addr).or_default();
         e.rtt_ms = Some(match e.rtt_ms {
             None => ms,
@@ -475,7 +485,7 @@ impl P2pNetwork {
 
     /// E1: snapshot of peer scores for the monitor (node_peers enrichment).
     pub fn peer_scores_snapshot(&self) -> Vec<(String, PeerScore)> {
-        let scores = self.peer_scores.lock().unwrap();
+        let scores = self.peer_scores.lock().unwrap_or_else(|e| e.into_inner());
         let mut v: Vec<(String, PeerScore)> = scores
             .iter()
             .map(|(a, s)| (a.to_string(), s.clone()))
@@ -877,11 +887,16 @@ impl P2pNetwork {
             let mut peer_key: Option<VerifyingKey> = None;
             let mut peer_nonce: Option<[u8; 32]> = None;
             // NET-01: incomplete handshakes are dropped after HANDSHAKE_TIMEOUT.
+            // H-8: per-connection inbound token bucket (anti single-peer starvation).
+            let conn_rl = self.conn_rl.clone();
             let mut first = true;
+            // H-4: keepalive interval, armed only after the first frame.
+            let mut ka: Option<tokio::time::Interval> = None;
             loop {
+                let global_rl = self.rl();
                 let frame_res = if first {
                     first = false;
-                    let r = tokio::time::timeout(HANDSHAKE_TIMEOUT, crate::net::frame::recv_frame_rl(&mut stream, &self.rl())).await;
+                    let r = tokio::time::timeout(HANDSHAKE_TIMEOUT, crate::net::frame::recv_frame_rl2(&mut stream, &global_rl, &conn_rl)).await;
                     if r.is_err() {
                         self.metrics.handshake_timeouts.fetch_add(1, Ordering::Relaxed);
                         crate::log_ev!("warn", "handshake.timeout", "addr" => addr.to_string());
@@ -890,11 +905,27 @@ impl P2pNetwork {
                 } else {
                     // NET-03: idle timeout — an established connection that
                     // sends nothing for IDLE_TIMEOUT is dropped.
-                    let r = tokio::time::timeout(IDLE_TIMEOUT, crate::net::frame::recv_frame_rl(&mut stream, &self.rl())).await;
-                    if r.is_err() {
-                        self.metrics.idle_timeouts.fetch_add(1, Ordering::Relaxed);
+                    let ka = ka.get_or_insert_with(|| {
+                        tokio::time::interval_at(tokio::time::Instant::now() + KEEPALIVE_INTERVAL, KEEPALIVE_INTERVAL)
+                    });
+                    tokio::select! {
+                        r = tokio::time::timeout(IDLE_TIMEOUT, crate::net::frame::recv_frame_rl2(&mut stream, &global_rl, &conn_rl)) => {
+                            if r.is_err() {
+                                self.metrics.idle_timeouts.fetch_add(1, Ordering::Relaxed);
+                            }
+                            r.unwrap_or_else(|_| Err(NexxusError::Io("idle timeout".into())))
+                        }
+                        _ = ka.tick() => {
+                            // H-4: signed keepalive Ping — держит соединение живым
+                            // и обнаруживает мёртвого пира по ошибке записи.
+                            self.metrics.keepalives_sent.fetch_add(1, Ordering::Relaxed);
+                            let ping = nexxus_core::wire::payloads::Ping;
+                            match self.send_signed_frame(&mut stream, &our_nonce, Opcode::Ping, rand::random::<u32>(), &ping).await {
+                                Ok(()) => continue,
+                                Err(e) => Err(e),
+                            }
+                        }
                     }
-                    r.unwrap_or_else(|_| Err(NexxusError::Io("idle timeout".into())))
                 };
                 let (opcode, req_id, payload, sig) = match frame_res {
                     Ok(f) => {
@@ -940,7 +971,7 @@ impl P2pNetwork {
                         let cap = self.max_peers.load(Ordering::Relaxed);
                         if !routing.contains(&their_id) && routing.len() >= cap {
                             let victim = {
-                                let scores = self.peer_scores.lock().unwrap();
+                                let scores = self.peer_scores.lock().unwrap_or_else(|e| e.into_inner());
                                 routing
                                     .peers()
                                     .into_iter()
@@ -981,9 +1012,6 @@ impl P2pNetwork {
                     peer.node_id = Some(their_id);
                     if let Some(api) = api_clone.lock().await.as_ref() {
                         api.register_peer(addr_clone, Some(their_id), "inbound").await;
-                    }
-                    if let Some(api) = self.local_api.lock().await.as_ref() {
-                        api.register_peer(addr, Some(their_id), "inbound").await;
                     }
                     let our_announce = self.our_announce(our_nonce);
                     self.send_signed_frame(&mut stream, &our_nonce, Opcode::NodeAnnounce, req_id, &our_announce).await?;
