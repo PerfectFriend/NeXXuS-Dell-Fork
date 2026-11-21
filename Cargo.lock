@@ -2432,8 +2432,10 @@ dependencies = [
 name = "nexxus-econ"
 version = "0.228.0"
 dependencies = [
+ "ed25519-dalek 2.2.0",
  "nexxus-core",
  "proptest",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
 ]
 

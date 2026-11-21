@@ -2,6 +2,7 @@
 //! Separate crate with its own release cycle (ADR-0004). All money is integer micro-NEXX.
 
 pub mod degradation;
+pub mod iou;
 pub mod sections;
 pub mod vesting;
 

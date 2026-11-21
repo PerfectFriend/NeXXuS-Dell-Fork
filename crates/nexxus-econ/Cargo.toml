@@ -9,6 +9,8 @@ repository.workspace = true
 [dependencies]
 nexxus-core = { workspace = true }
 thiserror = { workspace = true }
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true }
 
 [lints]
 workspace = true
