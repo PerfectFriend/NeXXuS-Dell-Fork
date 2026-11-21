@@ -97,7 +97,7 @@
 
 ## Phase F — Сеть и парк узлов
 
-### Task F1: Качество пиров и лимиты
+### Task F1: Качество пиров и лимиты — ✅ DONE 2026-11-20 (скоринг+eviction в E1; bandwidth caps: token bucket в `net/ratelimit.rs`, `max_up_kbps`/`max_down_kbps` в node.conf, env `NEXXUS_MAX_UP_KBPS`/`NEXXUS_MAX_DOWN_KBPS`, 0=unlimited, метрика `rl_wait_ms` в node_metrics + warning в UI; тесты bucket/roundtrip/set_rate_limit)
 - Скоринг пиров (успешные fetch/Por, latency из `node_test_interhost`), чёрный/белый списки, лимит скорости (token bucket) в конфиге; UI: таблица пиров со скорингом. Commit `feat(node): peer scoring + bandwidth caps`.
 
 ### Task F2: Fleet view (несколько узлов в мониторе) — ✅ DONE (`~/.nexxus/nodes/<name>.conf` + `<name>.token`; команды `nodes_list_cmd`/`node_api_to_cmd`; выпадающий список узлов в шапке монитора, все панели переключаются на выбранный узел; тест list/валидации имён, desktop 20/20, clippy 0)
