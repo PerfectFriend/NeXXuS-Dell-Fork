@@ -13,13 +13,7 @@
     "test:contracts": "tsx --test test/contracts-validation.test.ts",
     "test:vectors": "tsx test/golden-vectors.test.ts",
     "vectors:gen": "tsx scripts/generate-golden-vectors.ts",
-    "linux:daemon": "tsx scripts/linux-daemon.ts",
-    "linux:benchmark": "tsx scripts/linux-daemon.ts benchmark",
-    "linux:test-por": "tsx scripts/linux-daemon.ts test-por",
-    "linux:status": "tsx scripts/linux-daemon.ts status",
-    "linux:install": "bash scripts/install-ubuntu.sh",
-    "deb:build": "bash scripts/build-deb.sh",
-    "bundle:daemon": "esbuild scripts/linux-daemon.ts --bundle --platform=node --format=cjs --outfile=dist/nexxusd.cjs"
+    "deb:build": "bash scripts/build-deb.sh"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
