@@ -157,6 +157,7 @@
           <div class="controls-row">
             <button class="btn btn-outline" id="btn-chunks-refresh">📦 Чанки</button>
             <button class="btn btn-outline" id="btn-sync-refresh">📁 Sovereign Drive</button>
+            <button class="btn btn-outline" id="btn-provider-refresh">🖥️ Провайдер</button>
             <button class="btn btn-outline" id="btn-smp-refresh">🧩 SMP inbox</button>
             <button class="btn btn-outline" id="btn-por">🔍 PoR-проверка</button>
             <button class="btn btn-outline" id="btn-store-info">🗄 Инфо о сторе</button>
@@ -178,6 +179,17 @@
               <span id="sync-summary" class="muted">—</span>
             </div>
             <div id="sync-files-list" class="data-box" style="margin-top:8px">—</div>
+          </div>
+          <div id="provider-panel" class="provider-panel" style="display:none">
+            <h3>🖥️ Хостинг-провайдер (Storage Provider)</h3>
+            <div id="provider-summary" class="muted">Загрузка данных провайдера...</div>
+            <div class="row-inline" style="margin-top:10px">
+              <input id="provider-pin-root" placeholder="Root / Chunk Hash (hex 64)" style="flex:2">
+              <input id="provider-pin-price" type="number" placeholder="Цена (nano-TON/MB)" style="flex:1" value="0">
+              <input id="provider-pin-duration" type="number" placeholder="Срок (эпох)" style="flex:1" value="30">
+              <button class="btn btn-primary" id="btn-provider-deal-pin">📌 Закрепить сделку</button>
+            </div>
+            <div id="provider-deals-list" class="data-box" style="margin-top:8px">—</div>
           </div>
           <div id="smp-inbox" class="smp-inbox" style="display:none">
             <h3>🧩 SMP inbox & QR-контакты</h3>

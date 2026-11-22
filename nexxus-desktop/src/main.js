@@ -414,8 +414,12 @@ async function connectPeer() {
 async function refreshChunks() {
   const syncP = document.getElementById('sync-panel');
   if (syncP) syncP.style.display = 'none';
+  const provP = document.getElementById('provider-panel');
+  if (provP) provP.style.display = 'none';
   const inbox = document.getElementById('smp-inbox');
   if (inbox) inbox.style.display = 'none';
+  const names = document.getElementById('names-data');
+  if (names) names.style.display = 'none';
   const box = document.getElementById('storage-data');
   if (box) box.style.display = '';
   try {
@@ -437,9 +441,11 @@ async function refreshSync() {
   const box = document.getElementById('storage-data');
   const smp = document.getElementById('smp-inbox');
   const names = document.getElementById('names-data');
+  const provP = document.getElementById('provider-panel');
   if (box) box.style.display = 'none';
   if (smp) smp.style.display = 'none';
   if (names) names.style.display = 'none';
+  if (provP) provP.style.display = 'none';
   if (panel) panel.style.display = '';
 
   try {
@@ -478,6 +484,65 @@ async function scanSync() {
     refreshSync();
   } catch (e) {
     addStageLog(`Ошибка синхронизации: ${e}`, 'error');
+  }
+}
+
+// Phase 3: Linux Storage Provider Hosting & Deals
+async function refreshProvider() {
+  const panel = document.getElementById('provider-panel');
+  const box = document.getElementById('storage-data');
+  const sync = document.getElementById('sync-panel');
+  const smp = document.getElementById('smp-inbox');
+  const names = document.getElementById('names-data');
+  if (box) box.style.display = 'none';
+  if (sync) sync.style.display = 'none';
+  if (smp) smp.style.display = 'none';
+  if (names) names.style.display = 'none';
+  if (panel) panel.style.display = '';
+
+  try {
+    const status = await api('node_provider_status', {});
+    const dealsResp = await api('node_provider_list', {});
+    const deals = dealsResp && dealsResp.deals ? dealsResp.deals : [];
+
+    const summaryEl = document.getElementById('provider-summary');
+    if (summaryEl) {
+      summaryEl.textContent = `Статус: ${status.provider_mode || 'активен'} | Активных сделок: ${deals.length} | Использовано: ${formatBytes(status.used_bytes || 0)} | Модель: ${status.pricing_unit || 'nano_ton_per_mb_epoch'}`;
+    }
+
+    const listEl = document.getElementById('provider-deals-list');
+    if (listEl) {
+      if (deals.length === 0) {
+        listEl.innerHTML = '<div class="muted">Нет активных провайдерских сделок. Закрепите данные через форму выше или CLI: nexxusd provider pin.</div>';
+      } else {
+        listEl.innerHTML = deals.map(d =>
+          `<div class="log-entry" style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
+            <strong>${d.root}</strong><br>
+            <span class="muted">Цена: ${d.price_nano_ton || 0} nano-TON | Срок: ${d.duration_epochs || 0} эпох | Статус: ${d.status || 'active'}</span>
+          </div>`
+        ).join('');
+      }
+    }
+  } catch (e) {
+    const listEl = document.getElementById('provider-deals-list');
+    if (listEl) listEl.textContent = `Ошибка получения данных провайдера: ${e}`;
+  }
+}
+
+async function pinProviderDeal() {
+  const root = ($('provider-pin-root')?.value || '').trim();
+  const price = parseInt($('provider-pin-price')?.value || '0', 10);
+  const duration = parseInt($('provider-pin-duration')?.value || '30', 10);
+  if (!root) {
+    alert('Укажите root-хеш закрепляемого контента');
+    return;
+  }
+  try {
+    await api('node_provider_pin', { root, price, duration });
+    addStageLog(`Провайдерская сделка закреплена: ${root}`, 'success');
+    refreshProvider();
+  } catch (e) {
+    addStageLog(`Ошибка закрепления сделки: ${e}`, 'error');
   }
 }
 
@@ -534,6 +599,8 @@ async function addContactFromText() {
 async function refreshSmp() {
   const syncP = document.getElementById('sync-panel');
   if (syncP) syncP.style.display = 'none';
+  const provP = document.getElementById('provider-panel');
+  if (provP) provP.style.display = 'none';
   const inbox = document.getElementById('smp-inbox');
   const list = document.getElementById('smp-list');
   const box = document.getElementById('storage-data');
@@ -836,6 +903,8 @@ $('btn-ping').addEventListener('click', pingPeer);
 $('btn-chunks-refresh').addEventListener('click', refreshChunks);
 $('btn-sync-refresh').addEventListener('click', refreshSync);
 $('btn-sync-scan').addEventListener('click', scanSync);
+$('btn-provider-refresh').addEventListener('click', refreshProvider);
+$('btn-provider-deal-pin').addEventListener('click', pinProviderDeal);
 $('btn-smp-refresh').addEventListener('click', refreshSmp);
 $('btn-smp-send').addEventListener('click', sendSmp);
 // H1: QR-обмен контактами — payload "nexxus:<node_id hex>"
@@ -869,6 +938,12 @@ async function nameHistory() {
   catch (e) { showNames({ error: String(e) }); }
 }
 function showNames(obj) {
+  const syncP = document.getElementById('sync-panel');
+  if (syncP) syncP.style.display = 'none';
+  const provP = document.getElementById('provider-panel');
+  if (provP) provP.style.display = 'none';
+  const inbox = document.getElementById('smp-inbox');
+  if (inbox) inbox.style.display = 'none';
   const el = $('names-data');
   el.style.display = 'block';
   el.textContent = JSON.stringify(obj, null, 2);
