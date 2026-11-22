@@ -37,6 +37,7 @@ pub const COMMANDS: &[&str] = &[
     "upload",
     "download",
     "sync",
+    "provider",
     "test-por",
     "test-interhost",
     "logs",
@@ -407,6 +408,54 @@ async fn async_main(args: Vec<String>) -> i32 {
             }
             None => {
                 print_result(ws_call("node_sync_scan", json!({})).await)
+            }
+        },
+        "provider" => match rest.first().map(|s| s.as_str()) {
+            Some("pin") => {
+                let root = rest.get(1);
+                if let Some(r) = root {
+                    let mut price: u64 = 0;
+                    let mut duration: u64 = 30;
+                    let mut idx = 2;
+                    while idx < rest.len() {
+                        match rest[idx].as_str() {
+                            "--price" => {
+                                if let Some(p) = rest.get(idx + 1).and_then(|v| v.parse().ok()) {
+                                    price = p;
+                                    idx += 1;
+                                }
+                            }
+                            "--duration" => {
+                                if let Some(d) = rest.get(idx + 1).and_then(|v| v.parse().ok()) {
+                                    duration = d;
+                                    idx += 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                        idx += 1;
+                    }
+                    print_result(
+                        ws_call(
+                            "node_provider_pin",
+                            json!({
+                                "root": r,
+                                "price": price,
+                                "duration": duration,
+                            }),
+                        )
+                        .await,
+                    )
+                } else {
+                    eprintln!("usage: nexxusd provider pin <root-hex> [--price <nano-ton>] [--duration <epochs>]");
+                    2
+                }
+            }
+            Some("status") => print_result(ws_call("node_provider_status", json!({})).await),
+            Some("list") => print_result(ws_call("node_provider_list", json!({})).await),
+            _ => {
+                eprintln!("usage: nexxusd provider pin <root> [--price <nano-ton>] [--duration <epochs>] | status | list");
+                2
             }
         },
         "test-por" => print_result(ws_call("node_por", json!({})).await),

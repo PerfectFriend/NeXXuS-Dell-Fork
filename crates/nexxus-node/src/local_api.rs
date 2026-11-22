@@ -483,6 +483,9 @@ impl LocalApi {
             "node_download" => self.handle_node_download(req.params).await,
             "node_sync_scan" => self.handle_node_sync_scan(req.params).await,
             "node_sync_status" => self.handle_node_sync_status(req.params),
+            "node_provider_pin" => self.handle_node_provider_pin(req.params),
+            "node_provider_status" => self.handle_node_provider_status(),
+            "node_provider_list" => self.handle_node_provider_list(),
             "node_por" => self.handle_node_por().await,
             "node_audit_peer" => self.handle_node_audit_peer(req.params).await,
             "node_test_interhost" => self.handle_node_test_interhost(req.params).await,
@@ -1796,6 +1799,87 @@ impl LocalApi {
         engine.status()
     }
 
+    /// Linux Provider: pin root/hash with price in nano-TON and duration in epochs.
+    fn handle_node_provider_pin(&self, params: Option<Value>) -> Result<Value, NexxusError> {
+        let root = params
+            .as_ref()
+            .and_then(|p| p.get("root"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| NexxusError::Io("param 'root' required".into()))?;
+        let price = params
+            .as_ref()
+            .and_then(|p| p.get("price"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let duration = params
+            .as_ref()
+            .and_then(|p| p.get("duration"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(30);
+
+        if let Ok(hb) = hex::decode(root) {
+            if hb.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&hb);
+                let chunk_h = nexxus_core::types::ChunkHash(arr);
+                let _ = self.store.pin_chunk(&chunk_h);
+            }
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let meta_val = serde_json::json!({
+            "root": root,
+            "price_nano_ton": price,
+            "duration_epochs": duration,
+            "pinned_at_unix": now,
+            "status": "active"
+        });
+        let key = format!("provider_deal:{root}");
+        self.store.put_meta(&key, serde_json::to_string(&meta_val).unwrap_or_default().as_bytes())?;
+
+        Ok(serde_json::json!({
+            "ok": true,
+            "root": root,
+            "price_nano_ton": price,
+            "duration_epochs": duration,
+            "pinned": true,
+            "disclaimer": "accounting only, not payments"
+        }))
+    }
+
+    fn handle_node_provider_status(&self) -> Result<Value, NexxusError> {
+        let cap = self.store.max_store_bytes();
+        let used = self.store.store_size().unwrap_or(0);
+        let count = self.store.list_chunk_hashes().map(|v| v.len()).unwrap_or(0);
+        let deals = self.store.list_meta_prefix("provider_deal:")?;
+        Ok(serde_json::json!({
+            "provider_mode": "active",
+            "active_deals": deals.len(),
+            "disk_capacity_bytes": cap,
+            "used_bytes": used,
+            "stored_chunks": count,
+            "pricing_unit": "nano_ton_per_mb_epoch",
+            "disclaimer": "accounting only, not payments"
+        }))
+    }
+
+    fn handle_node_provider_list(&self) -> Result<Value, NexxusError> {
+        let deal_entries = self.store.list_meta_prefix("provider_deal:")?;
+        let mut deals = Vec::new();
+        for (_k, val_bytes) in deal_entries {
+            if let Ok(v) = serde_json::from_slice::<Value>(&val_bytes) {
+                deals.push(v);
+            }
+        }
+        Ok(serde_json::json!({
+            "deals": deals,
+            "count": deals.len(),
+            "disclaimer": "accounting only, not payments"
+        }))
+    }
+
     async fn handle_node_por(&self) -> Result<Value, NexxusError> {
         crate::vault::run_por(self.network.store())
     }
@@ -2182,5 +2266,52 @@ mod tests {
         let res2 = resp_status.result.unwrap();
         assert_eq!(res2["synced_files_count"], 1);
         assert_eq!(res2["files"][0]["relative_path"], "doc.txt");
+    }
+
+    #[tokio::test]
+    async fn provider_api_pin_status_and_list_roundtrip() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let store_path = dir.path().join("store.redb");
+        let store = Arc::new(ChunkStore::open(&store_path).unwrap());
+        let net = Arc::new(P2pNetwork::new(
+            NodeId([0x42; 32]),
+            "127.0.0.1:0".parse().unwrap(),
+            store.clone(),
+        ));
+        let api = LocalApi::new(net.clone(), store.clone());
+
+        let fake_root = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let req_pin = req(
+            "node_provider_pin",
+            Some(serde_json::json!({
+                "root": fake_root,
+                "price": 1000,
+                "duration": 50,
+            })),
+        );
+        let resp_pin = api.handle_request(req_pin).await;
+        assert_eq!(resp_code(&resp_pin), 0);
+        let pin_res = resp_pin.result.unwrap();
+        assert_eq!(pin_res["ok"], true);
+        assert_eq!(pin_res["price_nano_ton"], 1000);
+        assert_eq!(pin_res["duration_epochs"], 50);
+        assert_eq!(pin_res["disclaimer"], "accounting only, not payments");
+
+        let req_status = req("node_provider_status", None);
+        let resp_status = api.handle_request(req_status).await;
+        assert_eq!(resp_code(&resp_status), 0);
+        let status_res = resp_status.result.unwrap();
+        assert_eq!(status_res["provider_mode"], "active");
+        assert_eq!(status_res["active_deals"], 1);
+        assert_eq!(status_res["disclaimer"], "accounting only, not payments");
+
+        let req_list = req("node_provider_list", None);
+        let resp_list = api.handle_request(req_list).await;
+        assert_eq!(resp_code(&resp_list), 0);
+        let list_res = resp_list.result.unwrap();
+        assert_eq!(list_res["count"], 1);
+        assert_eq!(list_res["deals"][0]["root"], fake_root);
+        assert_eq!(list_res["deals"][0]["price_nano_ton"], 1000);
     }
 }

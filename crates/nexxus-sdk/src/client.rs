@@ -151,6 +151,29 @@ impl NexxusClient {
     pub async fn run_por(&self) -> Result<Value, NexxusError> {
         self.rpc_call("node_por", json!({})).await
     }
+
+    /// Pin content as a storage provider with pricing and duration.
+    pub async fn provider_pin(&self, root: &str, price_nano_ton: u64, duration_epochs: u64) -> Result<Value, NexxusError> {
+        self.rpc_call(
+            "node_provider_pin",
+            json!({
+                "root": root,
+                "price": price_nano_ton,
+                "duration": duration_epochs,
+            }),
+        )
+        .await
+    }
+
+    /// Query storage provider status.
+    pub async fn provider_status(&self) -> Result<Value, NexxusError> {
+        self.rpc_call("node_provider_status", json!({})).await
+    }
+
+    /// List active storage provider deals.
+    pub async fn provider_list(&self) -> Result<Value, NexxusError> {
+        self.rpc_call("node_provider_list", json!({})).await
+    }
 }
 
 impl Default for NexxusClient {
