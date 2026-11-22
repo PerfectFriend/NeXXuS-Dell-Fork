@@ -1,0 +1,33 @@
+[Unit]
+Description=RustSimplex SMP Relay — SimpleX Messaging Protocol на Rust (smp-rs)
+Documentation=https://github.com/PerfectFriend/RustSimplex
+After=network-online.target
+Wants=network-online.target
+# SMP-релей — отдельный сервис: он нужен ноде для обмена сообщениями
+# с другими узлами, но не должен блокировать её старт.
+Before=nexxus-node.service
+
+[Service]
+Type=simple
+User=root
+Group=nexxus
+WorkingDirectory=/var/lib/nexxus-smp
+Environment=NEXXUS_SMP_BIND=127.0.0.1:5223
+Environment=NEXXUS_SMP_STORE=/var/lib/nexxus-smp/store.smp
+ExecStart=/usr/local/bin/smp-server --bind ${NEXXUS_SMP_BIND} --store ${NEXXUS_SMP_STORE}
+Restart=always
+RestartSec=5s
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexxus-smp
+
+# Security Sandboxing
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/nexxus-smp
+
+[Install]
+WantedBy=multi-user.target

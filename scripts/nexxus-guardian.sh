@@ -33,15 +33,20 @@
 set -uo pipefail
 
 # ── Конфигурация (env с фолбэками) ─────────────────────────────────────────
-NEXXUS_UNIT="${NEXXUS_UNIT:-nexxus-node.service}"
+NEXXUS_UNIT="${NEXXUS_UNIT:-nexxus-rust-node.service}"
 NEXXUS_BIN="${NEXXUS_BIN:-/usr/local/bin/nexxusd}"
-NEXXUS_DATA_DIR="${NEXXUS_DATA_DIR:-/var/lib/nexxus}"
-NEXXUS_PORT="${NEXXUS_PORT:-3999}"
+NEXXUS_DATA_DIR="${NEXXUS_DATA_DIR:-/var/lib/nexxus-rust}"
+NEXXUS_PORT="${NEXXUS_PORT:-4001}"
 NEXXUS_HOST="${NEXXUS_HOST:-127.0.0.1}"
-# Health-check всегда идёт по loopback: NEXXUS_HOST в /etc/nexxus/nexxus.conf
-# — это адрес ПРОСЛУШИВАНИЯ ноды (0.0.0.0), а не адрес, по которому
-# ходят health-check'и. Поэтому используем отдельную переменную.
-NEXXUS_HEALTH_URL="${NEXXUS_HEALTH_URL:-http://127.0.0.1:${NEXXUS_PORT}/api/status}"
+# Rust-нода говорит по WebSocket с JSON-RPC и требует токен.
+# Health-check идёт через nx-api.cjs: он сам открывает WS, авторизуется
+# и возвращает результат метода node_status.
+NEXXUS_API_ADDR="${NEXXUS_API_ADDR:-127.0.0.1:4010}"
+NEXXUS_API_TOKEN_FILE="${NEXXUS_API_TOKEN_FILE:-/etc/nexxus-rust/api.token}"
+NEXXUS_NX_API="${NEXXUS_NX_API:-/opt/nexxus/scripts/nx-api.cjs}"
+NEXXUS_NODE_BIN="${NEXXUS_NODE_BIN:-/usr/local/bin/node}"
+# Запасной вариант: REST-эндпоинт control-plane (он сам ходит в ноду по WS).
+NEXXUS_HEALTH_URL="${NEXXUS_HEALTH_URL:-http://127.0.0.1:3998/api/status}"
 NEXXUS_CHECK_INTERVAL="${NEXXUS_CHECK_INTERVAL:-15}"      # секунд между проверками
 NEXXUS_HEALTH_TIMEOUT="${NEXXUS_HEALTH_TIMEOUT:-10}"      # таймаут одного запроса
 NEXXUS_MAX_FAILURES="${NEXXUS_MAX_FAILURES:-3}"            # столько подряд → перезапуск
@@ -97,8 +102,20 @@ notify() {
 
 # ── Проверка здоровья ──────────────────────────────────────────────────────
 # Возвращает 0, если нода жива и отдаёт валидный статус.
+# Основной путь — WS-JSON-RPC (nx-api.cjs): так нода сама отвечает ноде,
+# а не control-plane. Запасной — REST control-plane, если node недоступен.
 health_check() {
   local out
+
+  if [ -f "$NEXXUS_NX_API" ] && [ -x "$NEXXUS_NODE_BIN" ]; then
+    out=$(NEXXUS_API_ADDR="$NEXXUS_API_ADDR" \
+          NEXXUS_API_TOKEN_FILE="$NEXXUS_API_TOKEN_FILE" \
+          "$NEXXUS_NODE_BIN" "$NEXXUS_NX_API" node_status 2>&1) || return 1
+    # Ответ node_status содержит node_id — значит это наша нода.
+    printf '%s' "$out" | grep -q '"node_id"'
+    return $?
+  fi
+
   if command -v curl >/dev/null 2>&1; then
     out=$(curl -fsS --max-time "$NEXXUS_HEALTH_TIMEOUT" "$NEXXUS_HEALTH_URL" 2>&1) || return 1
   elif command -v node >/dev/null 2>&1; then
@@ -111,7 +128,7 @@ health_check() {
         .catch(e => { clearTimeout(t); process.exit(1); });
     ' "$NEXXUS_HEALTH_URL" "$NEXXUS_HEALTH_TIMEOUT" 2>&1) || return 1
   else
-    log ERROR "нет ни curl, ни node — нечем проверять здоровье"
+    log ERROR "нет nx-api.cjs и нечем проверить здоровье"
     return 2
   fi
   # Ответ должен быть JSON со строкой nodeId — иначе это не наша нода.
@@ -266,7 +283,7 @@ handle_control_command() {
 
 # ── Основной цикл ─────────────────────────────────────────────────────────
 main() {
-  log INFO "хранитель запущен: юнит=${NEXXUS_UNIT} health=${NEXXUS_HEALTH_URL}"
+  log INFO "хранитель запущен: юнит=${NEXXUS_UNIT} api=${NEXXUS_API_ADDR}"
   log INFO "интервал=${NEXXUS_CHECK_INTERVAL}s порог=${NEXXUS_MAX_FAILURES} cooldown=${NEXXUS_RESTART_COOLDOWN}s"
   log INFO "канал управления: ${NEXXUS_CONTROL_DIR}/command.json"
   notify "🛡️ NeXXus guardian запущен"

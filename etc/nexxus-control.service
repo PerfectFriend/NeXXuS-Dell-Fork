@@ -1,11 +1,11 @@
 [Unit]
-Description=NeXXuS Control Panel — веб-панель управления нодой (живёт независимо от ноды)
+Description=NeXXuS Control Panel — веб-панель управления Rust-нодой (живёт независимо от ноды)
 Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
 After=network-online.target
 Wants=network-online.target
 # Control-plane НЕ зависит от ноды: он должен работать, когда нода выключена,
 # иначе из дашборда нельзя нажать «Запустить». Поэтому здесь НЕТ Wants=
-# на nexxus-node.service и НЕТ Before= — в отличие от хранителя.
+# на nexxus-rust-node.service и НЕТ Before= — в отличие от хранителя.
 
 [Service]
 Type=simple
@@ -15,11 +15,14 @@ WorkingDirectory=/opt/nexxus
 Environment=NODE_ENV=production
 Environment=NEXXUS_CONTROL_HOST=127.0.0.1
 Environment=NEXXUS_CONTROL_PORT=3998
-Environment=NEXXUS_NODE_PORT=3999
 Environment=NEXXUS_DASHBOARD_DIR=/opt/nexxus/dashboard
-Environment=NEXXUS_CONFIG_FILE=/etc/nexxus/nexxus.conf
-Environment=NEXXUS_UNIT=nexxus-node.service
-Environment=NEXXUS_DATA_DIR=/var/lib/nexxus
+# Конфиг Rust-ноды (node.conf): env > node.conf > дефолт.
+Environment=NEXXUS_CONFIG_FILE=/etc/nexxus-rust/node.conf
+Environment=NEXXUS_UNIT=nexxus-rust-node.service
+Environment=NEXXUS_DATA_DIR=/var/lib/nexxus-rust
+# WS-JSON-RPC адрес Rust-ноды и файл токена (0640 root:nexxus).
+Environment=NEXXUS_API_ADDR=127.0.0.1:4010
+Environment=NEXXUS_API_TOKEN_FILE=/etc/nexxus-rust/api.token
 # Узел живёт в /usr/local/bin/node: в /usr/bin/node на этом хосте ничего нет
 # (там Hermes держит свою копию в ~/.hermes/tools/, недоступную из unit-файла).
 ExecStart=/usr/local/bin/node /opt/nexxus/scripts/nexxus-control-server.cjs
@@ -34,7 +37,7 @@ ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=true
 NoNewPrivileges=true
-ReadWritePaths=/var/lib/nexxus /etc/nexxus
+ReadWritePaths=/var/lib/nexxus-rust /etc/nexxus-rust
 
 [Install]
 WantedBy=multi-user.target

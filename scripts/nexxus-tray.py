@@ -39,10 +39,10 @@ from PyQt5.QtWidgets import QAction, QApplication, QMenu, QMessageBox, QSystemTr
 
 # ── Конфигурация (env с фолбэками) ─────────────────────────────────────────
 NEXXUS_HOST = os.environ.get("NEXXUS_HOST", "127.0.0.1")
-NEXXUS_PORT = os.environ.get("NEXXUS_PORT", "3999")
-NEXXUS_DATA_DIR = os.environ.get("NEXXUS_DATA_DIR", "/var/lib/nexxus")
+NEXXUS_PORT = os.environ.get("NEXXUS_PORT", "4001")
+NEXXUS_DATA_DIR = os.environ.get("NEXXUS_DATA_DIR", "/var/lib/nexxus-rust")
 NEXXUS_BIN = os.environ.get("NEXXUS_BIN", "/usr/local/bin/nexxusd")
-NEXXUS_UNIT = os.environ.get("NEXXUS_UNIT", "nexxus-node.service")
+NEXXUS_UNIT = os.environ.get("NEXXUS_UNIT", "nexxus-rust-node.service")
 NEXXUS_PAUSE_FILE = os.environ.get(
     "NEXXUS_PAUSE_FILE", os.path.join(NEXXUS_DATA_DIR, ".guardian-pause")
 )
@@ -57,7 +57,10 @@ NEXXUS_CONTROL_PORT = os.environ.get("NEXXUS_CONTROL_PORT", "3998")
 NEXXUS_DASHBOARD_URL = os.environ.get(
     "NEXXUS_DASHBOARD_URL", f"http://127.0.0.1:{NEXXUS_CONTROL_PORT}/"
 )
-BASE_URL = f"http://{NEXXUS_HOST}:{NEXXUS_PORT}"
+# Rust-нода говорит по WebSocket с JSON-RPC, поэтому трей ходит не в неё
+# напрямую, а в control-plane: тот сам переводит вызовы в WS-протокол
+# и отдаёт те же поля, что ждёт трей.
+BASE_URL = f"http://{NEXXUS_HOST}:{NEXXUS_CONTROL_PORT}"
 REFRESH_MS = int(os.environ.get("NEXXUS_TRAY_REFRESH_MS", "5000"))
 LOG_LINES = int(os.environ.get("NEXXUS_TRAY_LOG_LINES", "40"))
 

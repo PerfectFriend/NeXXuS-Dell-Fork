@@ -1,5 +1,5 @@
 [Unit]
-Description=NeXXus Tray — иконка в системном трее для хранителя ноды
+Description=NeXXus Tray — иконка в системном трее для хранителя Rust-ноды
 Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
 PartOf=graphical-session.target
 After=graphical-session.target
@@ -20,10 +20,10 @@ Type=simple
 WorkingDirectory=/opt/nexxus
 Environment=QT_QPA_PLATFORM=xcb
 Environment=NEXXUS_HOST=127.0.0.1
-Environment=NEXXUS_PORT=3999
-Environment=NEXXUS_DATA_DIR=/var/lib/nexxus
+Environment=NEXXUS_PORT=4001
+Environment=NEXXUS_DATA_DIR=/var/lib/nexxus-rust
 Environment=NEXXUS_BIN=/usr/local/bin/nexxusd
-Environment=NEXXUS_UNIT=nexxus-node.service
+Environment=NEXXUS_UNIT=nexxus-rust-node.service
 Environment=NEXXUS_CONTROL_PORT=3998
 Environment=NEXXUS_DASHBOARD_URL=http://127.0.0.1:3998/
 Environment=NEXXUS_TRAY_REFRESH_MS=5000
