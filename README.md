@@ -228,6 +228,8 @@ Ready-to-install distributions are available in `public/packages/`:
 | `nexxusd upload <file>` | Slices local file into 16KB chunks, applies RS(4+2), and disperses | `nexxusd upload /path/to/archive.tar.gz` |
 | `nexxusd download <hash> <out>` | Fetches shards from swarm, recovers via RS, and decrypts | `nexxusd download <sha256> /tmp/restored.bin` |
 | `nexxusd sync [path]` | Scan Sovereign Drive folder, slice, encode into RS(4+2), and index | `nexxusd sync` or `nexxusd sync status` |
+| `nexxusd provider pin <root>` | Pin file/chunk as a storage provider with price and epoch duration | `nexxusd provider pin <root> --price 1000 --duration 60` |
+| `nexxusd provider status\|list` | Inspect hosting provider status, disk capacity, and active deals | `nexxusd provider status` or `nexxusd provider list` |
 | `nexxusd logs [-n N]` | View structured operation log entries | `nexxusd logs -n 50` |
 | `nexxusd benchmark` | Test local NVMe read/write speed and Merkle tree calculation | `nexxusd benchmark` |
 
