@@ -1,6 +1,7 @@
 ;; ==============================================================================
-;; NeXXUs Protocol - TON Smart Contract: Auditor Council Bond & SBT Mandates (FunC)
-;; Part III: Top 10% Stakeholders, External TON/USDT Collateral, VOPRF Slashing
+;; NeXXUs Protocol - TON Smart Contract: Auditor Council Bond & Stake (FunC)
+;; Part III: External TON/USDT Collateral, Per-Address Bonds, Anti-Collusion Slashing
+;; Fixes audit defect C-8 (per-address bond tracking, withdrawal handler, slashing).
 ;; ==============================================================================
 
 #include "imports/stdlib.fc";
@@ -8,47 +9,47 @@
 const int OP_DEPOSIT_BOND = 0x7e1c0001;
 const int OP_WITHDRAW_BOND = 0x7e1c0002;
 const int OP_SLASH_AUDITOR_COLLUSION = 0x7e1c0003;
-const int OP_ISSUE_SBT_MANDATE = 0x7e1c0004;
 
+const int ERROR_UNAUTHORIZED = 300;
 const int ERROR_NOT_ENOUGH_STAKE = 301;
-const int ERROR_BOND_LOCKED = 302;
-const int ERROR_UNAUTHORIZED_SLASH = 303;
+const int ERROR_BOND_NOT_FOUND = 302;
+const int ERROR_BOND_STILL_LOCKED = 303;
 
 const int MIN_AUDITOR_BOND_NANOTONS = 1000000000000; ;; 1,000 TON per Auditor Seat
-const int MANDATE_EPOCH_DURATION = 86400; ;; 24 hours per mandate rotation
+const int UNBONDING_PERIOD_SECONDS = 1209600;       ;; 14 days unbonding lock
 
 ;; Storage:
 ;; admin_address: slice
-;; total_bonded_tons: uint128
+;; treasury_address: slice
+;; total_bonded_tons: coins
 ;; active_auditors_count: uint32
-;; auditor_bonds_dict: cell
-;; sbt_mandates_dict: cell
+;; auditor_bonds_dict: cell (hashmap: uint256 sender_hash -> slice owner, coins amount, uint64 deposited_at, uint64 unbond_requested_at)
 
-(slice, int, int, cell, cell) load_bond_data() inline {
+(slice, slice, int, int, cell) load_bond_data() inline {
     slice ds = get_data().begin_parse();
     return (
         ds~load_msg_addr(),
-        ds~load_uint(128),
+        ds~load_msg_addr(),
+        ds~load_coins(),
         ds~load_uint(32),
-        ds~load_dict(),
         ds~load_dict()
     );
 }
 
 () save_bond_data(
     slice admin_address,
+    slice treasury_address,
     int total_bonded_tons,
     int active_auditors_count,
-    cell auditor_bonds_dict,
-    cell sbt_mandates_dict
+    cell auditor_bonds_dict
 ) impure inline {
     set_data(
         begin_cell()
             .store_slice(admin_address)
-            .store_uint(total_bonded_tons, 128)
+            .store_slice(treasury_address)
+            .store_coins(total_bonded_tons)
             .store_uint(active_auditors_count, 32)
             .store_dict(auditor_bonds_dict)
-            .store_dict(sbt_mandates_dict)
         .end_cell()
     );
 }
@@ -70,45 +71,141 @@ const int MANDATE_EPOCH_DURATION = 86400; ;; 24 hours per mandate rotation
 
     (
         slice admin_address,
+        slice treasury_address,
         int total_bonded_tons,
         int active_auditors_count,
-        cell auditor_bonds_dict,
-        cell sbt_mandates_dict
+        cell auditor_bonds_dict
     ) = load_bond_data();
+
+    int sender_hash = slice_hash(sender);
 
     ;; Deposit external collateral in TON to qualify for Auditor Council
     if (op == OP_DEPOSIT_BOND) {
         throw_unless(ERROR_NOT_ENOUGH_STAKE, msg_value >= MIN_AUDITOR_BOND_NANOTONS);
-        
+
+        int current_bond = 0;
+        int is_new = 1;
+        (slice prev_slice, int found) = auditor_bonds_dict.udict_get?(256, sender_hash);
+        if (found) {
+            _ = prev_slice~load_msg_addr();
+            current_bond = prev_slice~load_coins();
+            is_new = 0;
+        }
+
+        int new_bond = current_bond + msg_value;
         total_bonded_tons += msg_value;
-        active_auditors_count += 1;
+        if (is_new) {
+            active_auditors_count += 1;
+        }
+
+        auditor_bonds_dict~udict_set_builder(
+            256,
+            sender_hash,
+            begin_cell()
+                .store_slice(sender)
+                .store_coins(new_bond)
+                .store_uint(now(), 64) ;; deposited_at
+                .store_uint(0, 64)     ;; unbond_requested_at (0 = active)
+        );
 
         save_bond_data(
             admin_address,
+            treasury_address,
             total_bonded_tons,
             active_auditors_count,
-            auditor_bonds_dict,
-            sbt_mandates_dict
+            auditor_bonds_dict
         );
         return ();
     }
 
-    ;; Slashing: Auditor caught signing invalid Proof-of-Retrievability (PoR)
-    if (op == OP_SLASH_AUDITOR_COLLUSION) {
-        throw_unless(ERROR_UNAUTHORIZED_SLASH, equal_slices(sender, admin_address));
-        
-        slice malicious_auditor = in_msg_body~load_msg_addr();
-        int slash_amount = in_msg_body~load_uint(128);
+    ;; Withdraw collateral: Step 1 request unbond, Step 2 release after 14 days
+    if (op == OP_WITHDRAW_BOND) {
+        (slice bond_slice, int found) = auditor_bonds_dict.udict_get?(256, sender_hash);
+        throw_unless(ERROR_BOND_NOT_FOUND, found);
 
-        total_bonded_tons = max(0, total_bonded_tons - slash_amount);
-        active_auditors_count = max(0, active_auditors_count - 1);
+        slice owner = bond_slice~load_msg_addr();
+        int bond_amount = bond_slice~load_coins();
+        int deposited_at = bond_slice~load_uint(64);
+        int unbond_requested_at = bond_slice~load_uint(64);
+
+        if (unbond_requested_at == 0) {
+            ;; Request unbonding: starts 14-day clock, deactivates auditor seat
+            auditor_bonds_dict~udict_set_builder(
+                256,
+                sender_hash,
+                begin_cell()
+                    .store_slice(owner)
+                    .store_coins(bond_amount)
+                    .store_uint(deposited_at, 64)
+                    .store_uint(now(), 64)
+            );
+            if (active_auditors_count > 0) {
+                active_auditors_count -= 1;
+            }
+        } else {
+            ;; Claim matured withdrawal after 14 days
+            throw_unless(ERROR_BOND_STILL_LOCKED, now() >= unbond_requested_at + UNBONDING_PERIOD_SECONDS);
+            
+            auditor_bonds_dict~udict_delete?(256, sender_hash);
+            total_bonded_tons = max(0, total_bonded_tons - bond_amount);
+
+            ;; Send coins back to auditor
+            var return_msg = begin_cell()
+                .store_uint(0x18, 6)
+                .store_slice(owner)
+                .store_coins(bond_amount)
+                .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+                .store_uint(0, 32)
+            .end_cell();
+
+            send_raw_message(return_msg, 1);
+        }
 
         save_bond_data(
             admin_address,
+            treasury_address,
             total_bonded_tons,
             active_auditors_count,
-            auditor_bonds_dict,
-            sbt_mandates_dict
+            auditor_bonds_dict
+        );
+        return ();
+    }
+
+    ;; Slashing: Auditor caught signing invalid Merkle root / PoR
+    if (op == OP_SLASH_AUDITOR_COLLUSION) {
+        throw_unless(ERROR_UNAUTHORIZED, equal_slices(sender, admin_address));
+        slice malicious_auditor = in_msg_body~load_msg_addr();
+        int slash_hash = slice_hash(malicious_auditor);
+
+        (slice bond_slice, int found) = auditor_bonds_dict.udict_get?(256, slash_hash);
+        if (found) {
+            _ = bond_slice~load_msg_addr();
+            int slashed_amount = bond_slice~load_coins();
+
+            auditor_bonds_dict~udict_delete?(256, slash_hash);
+            total_bonded_tons = max(0, total_bonded_tons - slashed_amount);
+            if (active_auditors_count > 0) {
+                active_auditors_count -= 1;
+            }
+
+            ;; Slashed collateral is transferred directly into treasury
+            var slash_msg = begin_cell()
+                .store_uint(0x18, 6)
+                .store_slice(treasury_address)
+                .store_coins(slashed_amount)
+                .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1)
+                .store_uint(0, 32)
+            .end_cell();
+
+            send_raw_message(slash_msg, 1);
+        }
+
+        save_bond_data(
+            admin_address,
+            treasury_address,
+            total_bonded_tons,
+            active_auditors_count,
+            auditor_bonds_dict
         );
         return ();
     }
@@ -117,7 +214,21 @@ const int MANDATE_EPOCH_DURATION = 86400; ;; 24 hours per mandate rotation
 }
 
 ;; Get methods
-(int, int) get_auditor_bond_stats() method_id {
-    (_, int total_bonded, int count, _, _) = load_bond_data();
-    return (total_bonded, count);
+(int, int) get_bond_stats() method_id {
+    (_, _, int total_bonded_tons, int active_auditors_count, _) = load_bond_data();
+    return (total_bonded_tons, active_auditors_count);
+}
+
+(int, int, int) get_auditor_bond(slice auditor_addr) method_id {
+    (_, _, _, _, cell auditor_bonds_dict) = load_bond_data();
+    int h = slice_hash(auditor_addr);
+    (slice bond_slice, int found) = auditor_bonds_dict.udict_get?(256, h);
+    if (found) {
+        _ = bond_slice~load_msg_addr();
+        int amount = bond_slice~load_coins();
+        int deposited_at = bond_slice~load_uint(64);
+        int unbond_at = bond_slice~load_uint(64);
+        return (amount, deposited_at, unbond_at);
+    }
+    return (0, 0, 0);
 }
