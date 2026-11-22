@@ -6,6 +6,7 @@ pub mod epoch;
 pub mod error;
 pub mod keys;
 pub mod merkle;
+pub mod pqc;
 pub mod rs;
 pub mod smp;
 pub mod types;
