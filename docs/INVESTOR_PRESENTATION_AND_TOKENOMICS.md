@@ -211,5 +211,5 @@ flowchart LR
 ## Контактная информация
 
 - **GitHub канонический репозиторий**: [https://github.com/PerfectFriend/NeXXUs-Node](https://github.com/PerfectFriend/NeXXUs-Node)
-- **Техническая документация**: [USER_GUIDE.md](file:///home/thomas/Projects/NeXXus-Node/USER_GUIDE.md)
+- **Техническая документация**: [USER_GUIDE.md](file:///home/thomas/Projects/NeXXus-Node/docs/USER_GUIDE.md)
 - **План эволюции**: [NEXXUS_100_PERCENT_EVOLUTION_PLAN.md](file:///home/thomas/.gemini/antigravity/brain/494c15d7-b6ef-43b0-836a-aaf8f21c45af/NEXXUS_100_PERCENT_EVOLUTION_PLAN.md)
