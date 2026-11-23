@@ -17,6 +17,7 @@ tor = [
     "dep:tor-rtcompat",
     "dep:tor-hsservice",
     "dep:tor-cell",
+    "dep:tor-proto",
     "dep:safelog",
     "dep:tracing-subscriber",
 ]
@@ -44,6 +45,7 @@ arti-client = { version = "0.48", optional = true, features = ["onion-service-se
 tor-rtcompat = { version = "0.48", optional = true, features = ["native-tls"] }
 tor-hsservice = { version = "0.48", optional = true }
 tor-cell = { version = "0.48", optional = true }
+tor-proto = { version = "0.48", optional = true }
 safelog = { version = "0.10", optional = true }
 tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
 fs2 = "0.4"

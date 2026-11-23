@@ -362,9 +362,17 @@ fn main() {
             let api_tor = Arc::clone(&api);
             let listen_addr_tor = listen_addr;
             tokio::spawn(async move {
+                // F3: при NEXXUS_API_ONION=1 WS-API также раздаётся на виртуальном
+                // порту API через ГЛАВНЫЙ onion (порты не меняют адрес сервиса и не
+                // требуют новой публикации дескриптора) — плюс отдельный сервис
+                // nexxusapi ниже. API наружу по умолчанию закрыт.
+                let api_onion_enabled = std::env::var("NEXXUS_API_ONION")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                let api_for_onion = if api_onion_enabled { Some(api_addr) } else { None };
                 match tor::TorSession::new().await {
                     Ok(mut ts) => {
-                        match ts.publish_onion(listen_addr_tor).await {
+                        match ts.publish_onion_with_api(listen_addr_tor, api_for_onion).await {
                             Ok(onion) => {
                                 eprintln!("nexxusd: tor onion v3 published: {onion}");
                                 api_tor.set_tor_status(crate::local_api::TorStatus {
@@ -388,9 +396,6 @@ fn main() {
                         }
                         // F3: второй onion v3 сервис на локальный API-порт —
                         // только при явном NEXXUS_API_ONION=1 (API наружу по умолчанию закрыт).
-                        let api_onion_enabled = std::env::var("NEXXUS_API_ONION")
-                            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                            .unwrap_or(false);
                         if api_onion_enabled {
                             match ts.publish_api_onion(api_addr).await {
                                 Ok(onion) => {

@@ -52,13 +52,27 @@ mod imp {
         /// Опубликовать onion v3 hidden service, форвардящий на локальный порт.
         /// Возвращает адрес вида `<56 base32>.onion`.
         pub async fn publish_onion(&mut self, local_addr: SocketAddr) -> std::io::Result<String> {
-            self.publish_onion_as(local_addr, "nexxus").await
+            self.publish_onion_as(local_addr, None, "nexxus").await
+        }
+
+        /// Опубликовать главный onion-сервис с маршрутизацией по виртуальному
+        /// порту: порт API (если Some) форвардится на `api_addr`, все остальные
+        /// порты — на P2P `p2p_addr`. В Tor v3 порты не входят в адрес сервиса
+        /// и не требуют перезагрузки дескриптора, поэтому один и тот же onion
+        /// может сразу раздавать и P2P (4001), и WS-API (4010).
+        pub async fn publish_onion_with_api(
+            &mut self,
+            p2p_addr: SocketAddr,
+            api_addr: Option<SocketAddr>,
+        ) -> std::io::Result<String> {
+            self.publish_onion_as(p2p_addr, api_addr, "nexxus").await
         }
 
         /// То же с произвольным nickname сервиса (нужен второй сервис для API).
         pub async fn publish_onion_as(
             &mut self,
             local_addr: SocketAddr,
+            api_addr: Option<SocketAddr>,
             nickname: &str,
         ) -> std::io::Result<String> {
             if nickname.is_empty() || nickname.len() > 16 || !nickname.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -78,19 +92,44 @@ mod imp {
                 .ok_or_else(|| io_err("onion service has no address"))?
                 .display_unredacted()
                 .to_string();
-            // Accept loop: входящие onion-стримы форвардим на локальный P2P порт.
-            // Задача держит Arc сервиса, пока жив TorSession.
+            // Accept loop: входящие onion-стримы форвардим на локальный порт.
+            // При включённом API (api_addr = Some) виртуальный порт API идёт на
+            // WS-API, все остальные — на P2P. Порты не меняют адрес сервиса.
+            // Задача держит Arc сервиса, пока жива TorSession.
             tokio::spawn(async move {
                 let mut requests = tor_hsservice::handle_rend_requests(requests);
                 while let Some(sr) = requests.next().await {
                     tokio::spawn(async move {
-                        if let Ok(mut onion_stream) =
-                            sr.accept(tor_cell::relaycell::msg::Connected::new_empty()).await
-                        {
-                            if let Ok(mut local) = tokio::net::TcpStream::connect(local_addr).await {
-                                let _ =
-                                    tokio::io::copy_bidirectional(&mut onion_stream, &mut local)
+                        let requested_port = match sr.request() {
+                            tor_proto::stream::IncomingStreamRequest::Begin(b) => Some(b.port()),
+                            _ => None,
+                        };
+                        let target = match (api_addr, requested_port) {
+                            (Some(api), Some(p)) if p == api.port() => api,
+                            _ => local_addr,
+                        };
+                        // Ошибки раньше проглатывались через `if let Ok(..)`, из-за
+                        // чего клиент получал END/MISC без единой записи в логе.
+                        // Теперь каждая ветка логируется.
+                        match sr.accept(tor_cell::relaycell::msg::Connected::new_empty()).await {
+                            Ok(mut onion_stream) => {
+                                match tokio::net::TcpStream::connect(target).await {
+                                    Ok(mut local) => {
+                                        let _ = tokio::io::copy_bidirectional(
+                                            &mut onion_stream,
+                                            &mut local,
+                                        )
                                         .await;
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "nexxusd: onion forward failed: connect {target}: {e}"
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("nexxusd: onion accept failed: {e}");
                             }
                         }
                     });
@@ -104,7 +143,7 @@ mod imp {
         /// F3: опубликовать второй onion v3 сервис на локальный API-порт
         /// (только при NEXXUS_API_ONION=1 — API наружу по умолчанию закрыт).
         pub async fn publish_api_onion(&mut self, api_addr: SocketAddr) -> std::io::Result<String> {
-            let onion = self.publish_onion_as(api_addr, "nexxusapi").await?;
+            let onion = self.publish_onion_as(api_addr, None, "nexxusapi").await?;
             self.api_onion = Some(onion.clone());
             Ok(onion)
         }

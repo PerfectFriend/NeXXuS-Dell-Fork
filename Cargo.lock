@@ -2468,6 +2468,7 @@ dependencies = [
  "tokio-tungstenite",
  "tor-cell",
  "tor-hsservice",
+ "tor-proto",
  "tor-rtcompat",
  "tracing-subscriber",
  "ureq",
