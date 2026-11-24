@@ -1,6 +1,6 @@
 [Unit]
 Description=NeXXuS Node (Rust) — P2P-хранилище с Tor/Arti, весь стек на Rust
-Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+Documentation=https://github.com/PerfectFriend/NeXXuS-Dell-Fork
 After=network-online.target
 Wants=network-online.target
 Requires=nexxus-smp.service

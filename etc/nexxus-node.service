@@ -1,6 +1,6 @@
 [Unit]
 Description=NeXXUs Sovereign Decentralized Storage Node Daemon
-Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+Documentation=https://github.com/PerfectFriend/NeXXuS-Dell-Fork
 After=network-online.target
 Wants=network-online.target
 

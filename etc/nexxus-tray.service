@@ -1,6 +1,6 @@
 [Unit]
 Description=NeXXus Tray — иконка в системном трее для хранителя Rust-ноды
-Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+Documentation=https://github.com/PerfectFriend/NeXXuS-Dell-Fork
 PartOf=graphical-session.target
 After=graphical-session.target
 # Трей — приложение пользовательской сессии: запускается от пользователя

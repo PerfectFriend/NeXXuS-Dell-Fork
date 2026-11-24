@@ -1,6 +1,6 @@
 [Unit]
 Description=NeXXus Guardian — хранитель Rust-ноды (следит за здоровьем, перезапускает)
-Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+Documentation=https://github.com/PerfectFriend/NeXXuS-Dell-Fork
 After=network-online.target
 Wants=network-online.target
 # Хранитель стартует ПЕРВЫМ и сам тянет ноду за собой:

@@ -1,6 +1,6 @@
 [Unit]
 Description=NeXXuS Control Panel — веб-панель управления Rust-нодой (живёт независимо от ноды)
-Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+Documentation=https://github.com/PerfectFriend/NeXXuS-Dell-Fork
 After=network-online.target
 Wants=network-online.target
 # Control-plane НЕ зависит от ноды: он должен работать, когда нода выключена,
