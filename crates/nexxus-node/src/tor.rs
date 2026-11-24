@@ -49,12 +49,6 @@ mod imp {
             })
         }
 
-        /// Опубликовать onion v3 hidden service, форвардящий на локальный порт.
-        /// Возвращает адрес вида `<56 base32>.onion`.
-        pub async fn publish_onion(&mut self, local_addr: SocketAddr) -> std::io::Result<String> {
-            self.publish_onion_as(local_addr, None, "nexxus").await
-        }
-
         /// Опубликовать главный onion-сервис с маршрутизацией по виртуальному
         /// порту: порт API (если Some) форвардится на `api_addr`, все остальные
         /// порты — на P2P `p2p_addr`. В Tor v3 порты не входят в адрес сервиса
@@ -184,7 +178,7 @@ mod tor_integration {
     async fn bootstrap_and_publish_onion_v3() {
         let mut sess = TorSession::new().await.expect("tor bootstrap");
         let onion = sess
-            .publish_onion("127.0.0.1:4001".parse().unwrap())
+            .publish_onion_with_api("127.0.0.1:4001".parse().unwrap(), None)
             .await
             .expect("publish onion");
         assert!(onion.ends_with(".onion"), "bad onion addr: {onion}");
