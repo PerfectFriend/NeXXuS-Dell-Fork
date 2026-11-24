@@ -1,0 +1,36 @@
+[Unit]
+Description=NeXXuS Node (Rust) — P2P-хранилище с Tor/Arti, весь стек на Rust
+Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+After=network-online.target
+Wants=network-online.target
+Requires=nexxus-smp.service
+After=nexxus-smp.service
+
+[Service]
+Type=simple
+User=root
+Group=nexxus
+WorkingDirectory=/var/lib/nexxus-rust
+Environment=NEXXUS_CONFIG_DIR=/etc/nexxus-rust
+Environment=NEXXUS_API_TOKEN_FILE=/etc/nexxus-rust/api.token
+Environment=NEXXUS_LISTEN=0.0.0.0:4001
+Environment=NEXXUS_API_ADDR=127.0.0.1:4010
+Environment=NEXXUS_TOR=1
+Environment=NEXXUS_MAX_STORE_BYTES=17179869184
+Environment=RUST_LOG=info
+ExecStart=/usr/local/bin/nexxusd serve /var/lib/nexxus-rust/store.redb
+Restart=always
+RestartSec=10s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+LimitNOFILE=65536
+
+# Security Sandboxing
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/nexxus-rust /etc/nexxus-rust
+
+[Install]
+WantedBy=multi-user.target

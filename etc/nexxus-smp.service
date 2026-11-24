@@ -1,11 +1,9 @@
 [Unit]
-Description=RustSimplex SMP Relay — SimpleX Messaging Protocol на Rust (smp-rs)
+Description=SMP Relay (RustSimplex / smp-rs) — SimpleX-совместимый релей сообщений
 Documentation=https://github.com/PerfectFriend/RustSimplex
 After=network-online.target
 Wants=network-online.target
-# SMP-релей — отдельный сервис: он нужен ноде для обмена сообщениями
-# с другими узлами, но не должен блокировать её старт.
-Before=nexxus-node.service
+Before=nexxus-rust-node.service
 
 [Service]
 Type=simple

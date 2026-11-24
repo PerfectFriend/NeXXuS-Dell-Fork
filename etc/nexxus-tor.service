@@ -1,0 +1,27 @@
+[Unit]
+Description=NeXXuS Tor — onion-сервис для P2P-порта ноды (сайдкар к Arti)
+Documentation=https://github.com/PerfectFriend/NeXXuS-Node-Hermes-Rust
+After=network-online.target
+Wants=network-online.target
+Before=nexxus-rust-node.service
+
+[Service]
+Type=simple
+User=debian-tor
+Group=debian-tor
+ExecStart=/usr/bin/tor -f /etc/tor/nexxus-torrc
+Restart=always
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nexxus-tor
+
+# Security Sandboxing
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/nexxus-tor
+
+[Install]
+WantedBy=multi-user.target

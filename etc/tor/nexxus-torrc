@@ -1,0 +1,17 @@
+# NeXXuS: onion-сервис для P2P-порта Rust-ноды.
+# Собственный onion-дескриптор Arti отвергается сетью ("Invalid HS descriptor"),
+# поэтому адрес публикует классический Tor, а сама нода остаётся на Rust.
+#
+# User задаётся в systemd-юните nexxus-tor.service (debian-tor).
+
+DataDirectory /var/lib/nexxus-tor
+HiddenServiceDir /var/lib/nexxus-tor/hs/nexxus
+HiddenServicePort 80 127.0.0.1:4001
+
+# Локальный Socks-порт не нужен: к onion ходит встроенный в ноду Arti.
+SocksPort 0
+ControlPort 0
+DataDirectoryGroupReadable 0
+AvoidDiskWrites 1
+SafeLogging 1
+Log notice stdout
