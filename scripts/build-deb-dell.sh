@@ -61,7 +61,7 @@ else
 fi
 
 # --- systemd-юниты (лежат в репо, etc/) ---
-for u in nexxus-rust-node nexxus-smp nexxus-control nexxus-guardian nexxus-tray nexxus-tor; do
+for u in nexxus-rust-node nexxus-smp nexxus-control nexxus-guardian nexxus-tray nexxus-tor nexxus-directory; do
     install -m 0644 "$ROOT/etc/$u.service" "$STAGE/etc/systemd/system/$u.service"
 done
 install -m 0644 "$ROOT/etc/nexxus-rust-node.service.d/10-tor-cache.conf" \
@@ -110,9 +110,10 @@ chown root:nexxus /etc/nexxus-rust/api.token
 chmod 0640 /etc/nexxus-rust/api.token
 systemctl daemon-reload
 systemctl enable nexxus-tor.service nexxus-smp.service nexxus-rust-node.service \
-    nexxus-control.service nexxus-guardian.service nexxus-tray.service 2>/dev/null || true
+    nexxus-control.service nexxus-guardian.service nexxus-tray.service \
+    nexxus-directory.service 2>/dev/null || true
 # Трей стартует только в графической сессии (WantedBy=graphical-session.target)
-for s in nexxus-tor nexxus-smp nexxus-rust-node nexxus-control nexxus-guardian; do
+for s in nexxus-tor nexxus-smp nexxus-rust-node nexxus-control nexxus-guardian nexxus-directory; do
     systemctl start "$s.service" 2>/dev/null || true
 done
 exit 0

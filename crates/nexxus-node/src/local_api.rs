@@ -198,6 +198,8 @@ pub struct LocalApi {
     /// BS-01: опциональный pin ожидаемого registry_pub (hex) для bootstrap-списков.
     /// Если задан — envelope с другим registry_pub отклоняется (trust-on-first-use закрыт).
     bootstrap_registry_pin: std::sync::Mutex<Option<String>>,
+    /// ADR-0011: состояние авто-дискавери (кандидаты + профили/рейтинг пиров).
+    discovery: std::sync::Mutex<Option<Arc<crate::discovery_state::DiscoveryState>>>,
     /// ADR-0009: IOU journal + anti-replay set (подключается из main после open).
     iou_journal: std::sync::Mutex<Option<crate::iou_journal::IouJournal>>,
     iou_seen: std::sync::Mutex<crate::iou_journal::Seen>,
@@ -304,6 +306,7 @@ impl LocalApi {
             smp_inbox_tx,
             smp_inbox_rx: Arc::new(Mutex::new(Some(smp_inbox_rx))),
             api_token: std::sync::Mutex::new(None),
+            discovery: std::sync::Mutex::new(None),
             panic: Arc::new(std::sync::Mutex::new(
                 crate::panic::PanicManager::load(panic_path)
                 .unwrap_or_else(|_| {
@@ -428,6 +431,20 @@ impl LocalApi {
         *self.tor_session.lock().await = Some(ts);
     }
 
+    /// ADR-0011: подключить состояние авто-дискавери (кандидаты + рейтинг).
+    pub fn set_discovery(&self, state: Arc<crate::discovery_state::DiscoveryState>) {
+        *self.discovery.lock().unwrap() = Some(state);
+    }
+
+    /// ADR-0011: снимок состояния авто-дискавери для API.
+    fn discovery_json(&self) -> serde_json::Value {
+        let guard = self.discovery.lock().unwrap();
+        match guard.as_ref() {
+            Some(s) => s.to_json(),
+            None => serde_json::json!({"enabled": false, "candidates": [], "profiles": [], "top_peers": []}),
+        }
+    }
+
     /// Handle a single JSON-RPC request and return a response value.
     async fn handle_request(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
@@ -446,6 +463,7 @@ impl LocalApi {
             "node_status" => self.handle_node_status().await,
             "node_metrics" => self.handle_node_metrics(),
             "node_peers" => self.handle_node_peers().await,
+            "node_discovery_status" => Ok(self.discovery_json()),
             "node_ping_peer" => self.handle_node_ping_peer(req.params).await,
             "node_chunks" => self.handle_node_chunks().await,
             "node_chunk_pin" => self.handle_node_chunk_pin(req.params, true),

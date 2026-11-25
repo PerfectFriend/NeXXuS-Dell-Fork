@@ -2,8 +2,10 @@
 //! Phase 7: bind/listen, dial, length-delimited frame codec, k-buckets,
 //! opcode dispatcher (Ping/Pong, KadFindNode/KadNodesFound, StoreChunk/FetchChunk).
 
+pub mod discovery;
 pub mod frame;
 pub mod network;
+pub mod probe;
 pub mod ratelimit;
 pub mod routing;
 

@@ -1,0 +1,27 @@
+[Unit]
+Description=NeXXuS Directory Relay — каталог известных адресов нод (ADR-0011)
+Documentation=https://github.com/PerfectFriend/NeXXuS-Dell-Fork
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=nexxus
+WorkingDirectory=/var/lib/nexxus-rust
+Environment=NEXXUS_DIRECTORY_BIND=127.0.0.1:4020
+ExecStart=/usr/local/bin/nexxusd directory --bind ${NEXXUS_DIRECTORY_BIND} --state /var/lib/nexxus-rust/directory.json
+Restart=always
+RestartSec=10s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+
+# Security Sandboxing
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/nexxus-rust
+
+[Install]
+WantedBy=multi-user.target

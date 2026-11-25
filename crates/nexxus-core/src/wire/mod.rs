@@ -3,4 +3,5 @@
 pub mod header;
 pub mod opcode;
 pub mod payloads;
+pub mod probe;
 pub mod reader;

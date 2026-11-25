@@ -17,6 +17,11 @@ pub enum Opcode {
     KadNodesFound = 0x0B,
     EpochFinalize = 0x0C,
     SmpEnvelope = 0x0D,
+    /// Probe (0x0E): измерение скорости канала. Запрос несёт размер эхо-данных,
+    /// ответ — те же байты. Расширение форка NeXXuS-Dell-Fork (ADR-0011).
+    Probe = 0x0E,
+    /// ProbeResp (0x0F): ответ на Probe.
+    ProbeResp = 0x0F,
     ErrorResponse = 0xFF,
 }
 
@@ -40,6 +45,8 @@ impl Opcode {
             0x0B => Some(Opcode::KadNodesFound),
             0x0C => Some(Opcode::EpochFinalize),
             0x0D => Some(Opcode::SmpEnvelope),
+            0x0E => Some(Opcode::Probe),
+            0x0F => Some(Opcode::ProbeResp),
             0xFF => Some(Opcode::ErrorResponse),
             _ => None,
         }

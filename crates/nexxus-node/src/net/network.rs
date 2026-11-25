@@ -594,6 +594,32 @@ impl P2pNetwork {
         addr.split(':').next().unwrap_or("").ends_with(".onion")
     }
 
+    /// Отправить Probe (0x0E) по установленному соединению и прочитать ProbeResp.
+    /// Используется для замера скорости канала (ADR-0011): подпись — нашей
+    /// сессионной nonce, ответ проверяется по nonce пира.
+    pub async fn probe_echo<S>(
+        &self,
+        stream: &mut S,
+        hs: &Handshake,
+        request_id: u32,
+        bytes: u32,
+    ) -> Result<Vec<u8>, NexxusError>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
+        let probe = nexxus_core::wire::probe::Probe { bytes };
+        self.send_signed_frame(stream, &hs.our_nonce, Opcode::Probe, request_id, &probe)
+            .await?;
+        let (op, _rid, payload) = self.recv_req_frame(stream, hs).await?;
+        if op != Opcode::ProbeResp {
+            return Err(NexxusError::Io(format!(
+                "expected ProbeResp, got opcode 0x{:02x}",
+                op.to_u8()
+            )));
+        }
+        Ok(nexxus_core::wire::probe::ProbeResp::decode(&payload)?.data)
+    }
+
     /// Dial a peer through its Tor onion v3 address (`<56ch>.onion:port`):
     /// открываем arti DataStream и делаем signed NodeAnnounce handshake поверх
     /// него. Требует feature `tor` (включён по умолчанию).
@@ -1043,6 +1069,24 @@ impl P2pNetwork {
             }
             Opcode::Pong => {
                 // unsolicited pong: nothing to do
+            }
+            Opcode::Probe => {
+                // Замер скорости канала (ADR-0011): возвращаем запрошенное число
+                // байт. Ограничение — 1 МиБ (PROBE_MAX_BYTES), иначе 0x0003.
+                let probe = nexxus_core::wire::probe::Probe::decode(payload).map_err(|e| {
+                    NexxusError::Io(format!("bad Probe: {e}"))
+                })?;
+                let mut buf = vec![0u8; probe.bytes as usize];
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut buf);
+                let resp = nexxus_core::wire::probe::ProbeResp {
+                    bytes: probe.bytes,
+                    data: buf,
+                };
+                self.send_signed_frame(stream, our_nonce, Opcode::ProbeResp, request_id, &resp)
+                    .await?;
+            }
+            Opcode::ProbeResp => {
+                // ответ на наш Probe: разбирает инициатор запроса
             }
             Opcode::NodeAnnounce => {
                 // Verified and handled in handle_connection before dispatch;

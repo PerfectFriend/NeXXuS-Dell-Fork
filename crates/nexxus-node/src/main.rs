@@ -35,6 +35,9 @@ mod logging;
 mod bootstrap;
 mod node_config;
 mod iou_journal;
+mod directory;
+mod discovery_state;
+mod discovery_runner;
 
 use crate::net::P2pNetwork;
 use crate::storage::ChunkStore;
@@ -132,6 +135,51 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let first = args.first().map(|s| s.as_str());
     if let Some(cmd) = first {
+        if cmd == "directory" {
+            // Каталог-релей: список известных адресов нод (ADR-0011).
+            //   nexxusd directory [--bind 127.0.0.1:4020] [--state <file>]
+            let mut bind = "127.0.0.1:4020".to_string();
+            let mut state = std::path::PathBuf::from("/var/lib/nexxus-rust/directory.json");
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--bind" if i + 1 < args.len() => {
+                        bind = args[i + 1].clone();
+                        i += 2;
+                    }
+                    "--state" if i + 1 < args.len() => {
+                        state = std::path::PathBuf::from(&args[i + 1]);
+                        i += 2;
+                    }
+                    other => {
+                        eprintln!("nexxusd: directory: неизвестный аргумент `{other}`");
+                        process::exit(2);
+                    }
+                }
+            }
+            let addr: SocketAddr = match bind.parse() {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("nexxusd: directory: неверный --bind: {e}");
+                    process::exit(2);
+                }
+            };
+            let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("nexxusd: directory: runtime: {e}");
+                    process::exit(1);
+                }
+            };
+            runtime.block_on(async {
+                let st = crate::directory::DirectoryState::new(state);
+                if let Err(e) = crate::directory::serve(addr, st).await {
+                    eprintln!("nexxusd: directory: {e}");
+                    process::exit(1);
+                }
+            });
+            return;
+        }
         if cli::COMMANDS.contains(&cmd) {
             cli::run(args);
             return;
@@ -346,6 +394,11 @@ fn main() {
             }
         }
 
+        // Слот для нашего onion-адреса: дискавери публикует его в каталог
+        // и в beacon (ADR-0011). Объявляется всегда (даже без feature tor).
+        let onion_slot: Arc<std::sync::Mutex<Option<String>>> =
+            Arc::new(std::sync::Mutex::new(None));
+
         // --- Tor (feature `tor`, NEXXUS_TOR=0 чтобы выключить): bootstrap arti
         // и публикация onion v3 hidden service на P2P-порту; статус — в node_tor.
         //
@@ -361,6 +414,7 @@ fn main() {
         {
             let api_tor = Arc::clone(&api);
             let listen_addr_tor = listen_addr;
+            let onion_slot_tor = Arc::clone(&onion_slot);
             tokio::spawn(async move {
                 // F3: при NEXXUS_API_ONION=1 WS-API также раздаётся на виртуальном
                 // порту API через ГЛАВНЫЙ onion (порты не меняют адрес сервиса и не
@@ -375,6 +429,8 @@ fn main() {
                         match ts.publish_onion_with_api(listen_addr_tor, api_for_onion).await {
                             Ok(onion) => {
                                 eprintln!("nexxusd: tor onion v3 published: {onion}");
+                                *onion_slot_tor.lock().unwrap_or_else(|e| e.into_inner()) =
+                                    Some(onion.clone());
                                 api_tor.set_tor_status(crate::local_api::TorStatus {
                                     enabled: true,
                                     onion_address: Some(onion),
@@ -434,6 +490,114 @@ fn main() {
         }
         // Привязываем API к сети, чтобы сеть могла регистрировать пиров в API.
         net.set_local_api(Arc::clone(&api)).await;
+
+        // --- ADR-0011: авто-дискавери (LAN beacon + sweep + Tailscale + каталог) ---
+        // Конфиг: node.conf (env перекрывает) — discovery, beacon_port, top_peers,
+        // directory_url и т.д. cluster_tag деривится из seed хранилища: одинаковый
+        // BIP-39 ⇒ одинаковый тег ⇒ «свои» ноды узнаются без ручной настройки.
+        let discovery_cfg = crate::discovery_state::DiscoveryConfig {
+            enabled: crate::node_config::cfg_or_env(&conf, "discovery", "NEXXUS_DISCOVERY", "1")
+                != "0",
+            beacon_port: crate::node_config::cfg_or_env(
+                &conf,
+                "beacon_port",
+                "NEXXUS_BEACON_PORT",
+                "4002",
+            )
+            .parse()
+            .unwrap_or(4002),
+            beacon_interval_secs: crate::node_config::cfg_or_env(
+                &conf,
+                "beacon_interval",
+                "NEXXUS_BEACON_INTERVAL",
+                "15",
+            )
+            .parse()
+            .unwrap_or(15),
+            lan_sweep: crate::node_config::cfg_or_env(
+                &conf,
+                "lan_sweep",
+                "NEXXUS_LAN_SWEEP",
+                "1",
+            ) != "0",
+            lan_sweep_interval_secs: crate::node_config::cfg_or_env(
+                &conf,
+                "lan_sweep_interval",
+                "NEXXUS_LAN_SWEEP_INTERVAL",
+                "120",
+            )
+            .parse()
+            .unwrap_or(120),
+            tailscale: crate::node_config::cfg_or_env(
+                &conf,
+                "tailscale_discovery",
+                "NEXXUS_TAILSCALE_DISCOVERY",
+                "1",
+            ) != "0",
+            directory_url: {
+                let u = crate::node_config::cfg_or_env(
+                    &conf,
+                    "directory_url",
+                    "NEXXUS_DIRECTORY_URL",
+                    "",
+                );
+                if u.is_empty() {
+                    None
+                } else {
+                    Some(u)
+                }
+            },
+            directory_interval_secs: crate::node_config::cfg_or_env(
+                &conf,
+                "directory_interval",
+                "NEXXUS_DIRECTORY_INTERVAL",
+                "60",
+            )
+            .parse()
+            .unwrap_or(60),
+            probe_interval_secs: crate::node_config::cfg_or_env(
+                &conf,
+                "probe_interval",
+                "NEXXUS_PROBE_INTERVAL",
+                "60",
+            )
+            .parse()
+            .unwrap_or(60),
+            top_peers: crate::node_config::cfg_or_env(
+                &conf,
+                "top_peers",
+                "NEXXUS_TOP_PEERS",
+                "8",
+            )
+            .parse()
+            .unwrap_or(8)
+            .clamp(6, 12),
+            p2p_port: listen_addr.port(),
+        };
+        let cluster_tag = crate::net::discovery::cluster_tag_from_seed(&node_iden.seed);
+        let discovery_state = Arc::new(crate::discovery_state::DiscoveryState::new(
+            discovery_cfg.clone(),
+            cluster_tag,
+        ));
+        api.set_discovery(Arc::clone(&discovery_state));
+        if discovery_cfg.enabled {
+            let runner = crate::discovery_runner::DiscoveryRunner {
+                net: Arc::clone(&net),
+                identity: epoch_identity.clone(),
+                cluster_tag,
+                state: Arc::clone(&discovery_state),
+                onion_slot: Arc::clone(&onion_slot),
+            };
+            tokio::spawn(async move {
+                runner.run().await;
+            });
+            println!(
+                "nexxusd: discovery enabled (beacon udp/{}, top_peers={})",
+                discovery_cfg.beacon_port, discovery_cfg.top_peers
+            );
+        } else {
+            println!("nexxusd: discovery disabled (node.conf: discovery=0)");
+        }
 
         println!(
             "nexxusd {} — node {} listening on {}",
