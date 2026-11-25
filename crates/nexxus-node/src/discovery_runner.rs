@@ -304,8 +304,14 @@ mod tests {
             broadcast_addr(std::net::Ipv4Addr::new(192, 168, 58, 10), 24),
             std::net::Ipv4Addr::new(192, 168, 58, 255)
         );
+        // /30: сеть 10.1.2.0, broadcast 10.1.2.3
         assert_eq!(
             broadcast_addr(std::net::Ipv4Addr::new(10, 1, 2, 3), 30),
+            std::net::Ipv4Addr::new(10, 1, 2, 3)
+        );
+        // /29: сеть 10.1.2.0, broadcast 10.1.2.7
+        assert_eq!(
+            broadcast_addr(std::net::Ipv4Addr::new(10, 1, 2, 3), 29),
             std::net::Ipv4Addr::new(10, 1, 2, 7)
         );
     }
