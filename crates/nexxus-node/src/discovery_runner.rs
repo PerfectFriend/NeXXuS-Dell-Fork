@@ -45,7 +45,8 @@ impl DiscoveryRunner {
             let registry = self.state.registry.clone();
             let cluster = self.cluster_tag;
             let port = cfg.beacon_port;
-            tokio::spawn(async move { beacon_listener(port, cluster, registry).await })
+            let our_node_id = self.net.our_id().0;
+            tokio::spawn(async move { beacon_listener(port, cluster, our_node_id, registry).await })
         };
 
         let mut last_beacon = 0u64;
@@ -121,11 +122,18 @@ impl DiscoveryRunner {
     /// TCP-sweep локальной подсети.
     async fn sweep_lan(&self) {
         let cfg = self.state.config.clone();
+        // Порты для sweep: стандартный P2P-порт 4001 + наш собственный
+        // (у соседа может быть свой). Нас самих sweep исключает по node_id.
+        let mut ports: Vec<u16> = vec![4001];
+        if !ports.contains(&cfg.p2p_port) {
+            ports.push(cfg.p2p_port);
+        }
         for (ip, prefix) in discovery::local_lan_cidrs() {
             let found = discovery::sweep_lan(
                 Arc::clone(&self.net),
                 (ip, prefix),
-                cfg.p2p_port,
+                &ports,
+                self.net.our_id().0,
                 self.state.registry.clone(),
                 32,
             )
@@ -195,7 +203,12 @@ impl DiscoveryRunner {
         }
         match directory::fetch(url).await {
             Ok(records) => {
+                let our_hex = hex::encode(self.net.our_id().0);
                 for r in records {
+                    if r.node_id == our_hex {
+                        // Наша же запись из каталога — себя пиром не считаем.
+                        continue;
+                    }
                     let cluster = hex::decode(&r.cluster_tag)
                         .ok()
                         .and_then(|b| <[u8; 16]>::try_from(b.as_slice()).ok());
@@ -252,7 +265,13 @@ pub fn broadcast_addr(ip: std::net::Ipv4Addr, prefix: u8) -> std::net::Ipv4Addr 
 }
 
 /// Слушатель чужих beacon'ов: проверяем подпись и cluster_tag.
-async fn beacon_listener(port: u16, our_cluster: [u8; 16], registry: Registry) {
+/// Собственный beacon (мы слышим свой broadcast) игнорируем по node_id.
+async fn beacon_listener(
+    port: u16,
+    our_cluster: [u8; 16],
+    our_node_id: [u8; 32],
+    registry: Registry,
+) {
     let sock = match tokio::net::UdpSocket::bind(("0.0.0.0", port)).await {
         Ok(s) => s,
         Err(e) => {
@@ -269,6 +288,10 @@ async fn beacon_listener(port: u16, our_cluster: [u8; 16], registry: Registry) {
         let Ok(body) = Beacon::decode_body(&raw[..raw.len().saturating_sub(64)]) else {
             continue;
         };
+        if body.node_id == our_node_id {
+            // Это наш собственный broadcast.
+            continue;
+        }
         let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&body.pubkey) else {
             continue;
         };

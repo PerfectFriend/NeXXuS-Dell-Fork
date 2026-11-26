@@ -280,7 +280,7 @@ fn main() {
         // Mnemonic печатается ровно один раз — при первом создании.
         // S4/ADR-0010: PIN для seed vault — из env или systemd-credential.
         let seed_pin = vault_pin_from_env_or_credential();
-        let (node_iden, fresh_mnemonic) = load_or_create_identity(&store, seed_pin.as_ref().map(|z| z.as_str())).unwrap_or_else(|e| {
+        let (node_iden, fresh_mnemonic) = load_or_create_identity(&store, seed_pin.as_ref().map(|z| z.as_str()), crate::node_config::host_index(&conf)).unwrap_or_else(|e| {
             eprintln!("nexxusd: identity load failed: {e}");
             process::exit(1);
         });

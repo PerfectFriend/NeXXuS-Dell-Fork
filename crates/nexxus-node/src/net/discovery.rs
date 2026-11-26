@@ -343,55 +343,83 @@ pub struct TailscalePeer {
     pub ips: Vec<Ipv4Addr>,
 }
 
-/// Путь к CLI tailscale: в systemd-юнитах PATH минимальный и не содержит
+/// Кандидаты CLI tailscale: в systemd-юнитах PATH минимальный и не содержит
 /// /snap/bin, поэтому проверяем известные места явно (snap/apt/локальный).
-pub fn tailscale_cli() -> Option<String> {
+/// Порядок неважен: выбирается тот, кто реально отвечает (на хосте могут
+/// стоять две установки — snap и apt, а работает только одна из них).
+pub fn tailscale_candidates() -> Vec<String> {
     const CANDIDATES: [&str; 4] = [
         "tailscale",
         "/snap/bin/tailscale",
         "/usr/bin/tailscale",
         "/usr/local/bin/tailscale",
     ];
+    let mut out: Vec<String> = Vec::new();
     for c in CANDIDATES {
-        if c.contains('/') {
-            if std::path::Path::new(c).exists() {
-                return Some(c.to_string());
-            }
-        } else if let Ok(out) = std::process::Command::new(c).arg("version").output() {
-            if out.status.success() {
-                return Some(c.to_string());
-            }
+        let exists = if c.contains('/') {
+            std::path::Path::new(c).exists()
+        } else {
+            std::process::Command::new(c)
+                .arg("version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+        if exists && !out.iter().any(|x| x == c) {
+            out.push(c.to_string());
+        }
+    }
+    out
+}
+
+/// Наш собственный tailnet-адрес (`tailscale ip -4`).
+pub fn tailscale_self_ip() -> Option<Ipv4Addr> {
+    for cli in tailscale_candidates() {
+        let Ok(out) = std::process::Command::new(&cli).args(["ip", "-4"]).output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        if let Some(ip) = text
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .and_then(|l| l.parse().ok())
+        {
+            return Some(ip);
         }
     }
     None
 }
 
-/// Наш собственный tailnet-адрес (`tailscale ip -4`).
-pub fn tailscale_self_ip() -> Option<Ipv4Addr> {
-    let cli = tailscale_cli()?;
-    let out = std::process::Command::new(cli).args(["ip", "-4"]).output().ok()?;
-    let text = String::from_utf8(out.stdout).ok()?;
-    text.lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .and_then(|l| l.parse().ok())
-}
-
 /// Пиры tailnet из `tailscale status --json`.
 pub fn tailscale_peers() -> Vec<TailscalePeer> {
-    let Some(cli) = tailscale_cli() else {
+    for cli in tailscale_candidates() {
+        let Ok(out) = std::process::Command::new(&cli)
+            .args(["status", "--json"])
+            .output()
+        else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let peers = parse_tailscale_status(&out.stdout);
+        if !peers.is_empty() {
+            return peers;
+        }
+    }
+    Vec::new()
+}
+
+/// Разбор JSON-вывода `tailscale status --json` в список пиров.
+fn parse_tailscale_status(bytes: &[u8]) -> Vec<TailscalePeer> {
+    let Ok(text) = std::str::from_utf8(bytes) else {
         return Vec::new();
     };
-    let Ok(out) = std::process::Command::new(cli)
-        .args(["status", "--json"])
-        .output()
-    else {
-        return Vec::new();
-    };
-    let Ok(text) = String::from_utf8(out.stdout) else {
-        return Vec::new();
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
         return Vec::new();
     };
     let mut peers = Vec::new();
@@ -464,11 +492,14 @@ pub async fn connect_handshake(
     Ok((stream, hs, started.elapsed().as_millis()))
 }
 
-/// TCP-sweep локальной подсети: ищем ноды NeXXuS на P2P-порту.
+/// TCP-sweep локальной подсети: ищем ноды NeXXuS на P2P-портах.
+/// `ports` — набор портов для проверки (обычно 4001 + наш собственный).
+/// Сама нода исключается по node_id, иначе sweep «находит» сам себя.
 pub async fn sweep_lan(
     net: Arc<P2pNetwork>,
     cidr: (Ipv4Addr, u8),
-    port: u16,
+    ports: &[u16],
+    our_node_id: [u8; 32],
     registry: Registry,
     concurrency: usize,
 ) -> usize {
@@ -477,17 +508,24 @@ pub async fn sweep_lan(
     let mut found = 0usize;
     let mut tasks = Vec::new();
     for ip in hosts {
-        let sem = Arc::clone(&sem);
-        let net = Arc::clone(&net);
-        tasks.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.ok()?;
-            let addr = SocketAddr::V4(SocketAddrV4::new(ip, port));
-            if let Ok((node_id, _rtt)) = handshake_probe(&net, addr, 700).await {
-                Some((addr, node_id))
-            } else {
-                None
-            }
-        }));
+        for port in ports {
+            let sem = Arc::clone(&sem);
+            let net = Arc::clone(&net);
+            let port = *port;
+            tasks.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await.ok()?;
+                let addr = SocketAddr::V4(SocketAddrV4::new(ip, port));
+                if let Ok((node_id, _rtt)) = handshake_probe(&net, addr, 700).await {
+                    if node_id == our_node_id {
+                        // Это мы сами — не пир.
+                        return None;
+                    }
+                    Some((addr, node_id))
+                } else {
+                    None
+                }
+            }));
+        }
     }
     for t in tasks {
         if let Ok(Some((addr, node_id))) = t.await {

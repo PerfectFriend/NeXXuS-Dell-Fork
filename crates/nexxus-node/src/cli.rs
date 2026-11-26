@@ -592,7 +592,7 @@ fn cmd_init(rest: &[String]) -> i32 {
         Ok(x) => x,
         Err(e) => return fail(&e),
     };
-    match crate::identity_store::init_identity(&db, mnemonic.as_deref(), crate::vault_pin_from_env_or_credential().as_ref().map(|z| z.as_str())) {
+    match crate::identity_store::init_identity(&db, mnemonic.as_deref(), crate::vault_pin_from_env_or_credential().as_ref().map(|z| z.as_str()), crate::node_config::host_index(&crate::node_config::load_file())) {
         Ok((iden, created)) => {
             println!(
                 "{}",
@@ -621,7 +621,7 @@ async fn cmd_id(rest: &[String]) -> i32 {
         .map(PathBuf::from)
         .unwrap_or_else(default_store);
     match crate::storage::ChunkStore::open(&path) {
-        Ok(db) => match crate::identity_store::load_or_create_identity(&db, crate::vault_pin_from_env_or_credential().as_ref().map(|z| z.as_str())) {
+        Ok(db) => match crate::identity_store::load_or_create_identity(&db, crate::vault_pin_from_env_or_credential().as_ref().map(|z| z.as_str()), crate::node_config::host_index(&crate::node_config::load_file())) {
             Ok((iden, _)) => {
                 println!(
                     "{}",

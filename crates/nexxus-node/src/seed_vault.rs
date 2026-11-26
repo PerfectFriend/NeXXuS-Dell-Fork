@@ -134,7 +134,7 @@ pub enum RestoreOutcome {
 
 /// Verify PIN and, if correct, import the decrypted mnemonic.
 /// Duress-PIN never imports anything — it returns `RestoreOutcome::Duress`.
-pub fn restore_seed(store: &ChunkStore, pin: &str) -> Result<RestoreOutcome, NexxusError> {
+pub fn restore_seed(store: &ChunkStore, pin: &str, host_index: u32) -> Result<RestoreOutcome, NexxusError> {
     let path = seed_vault_path(store);
     let json = std::fs::read_to_string(&path)
         .map_err(|e| NexxusError::Io(format!("seed vault not found/readable: {e}")))?;
@@ -182,7 +182,7 @@ pub fn restore_seed(store: &ChunkStore, pin: &str) -> Result<RestoreOutcome, Nex
             );
         }
     }
-    let (node_id, status) = import_mnemonic(store, &phrase)?;
+    let (node_id, status) = import_mnemonic(store, &phrase, host_index)?;
     Ok(if status == "imported" {
         RestoreOutcome::Imported(node_id)
     } else {
@@ -200,7 +200,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("store.redb");
         let store = ChunkStore::open(&path).unwrap();
-        let _ = load_or_create_identity(&store, None).unwrap();
+        let _ = load_or_create_identity(&store, None, 0).unwrap();
         (dir, store)
     }
 
@@ -229,9 +229,9 @@ mod tests {
     fn restore_with_correct_pin_gives_already_on_same_store() {
         let (_d, store) = store_with_identity();
         backup_seed(&store, "1234", None).unwrap();
-        match restore_seed(&store, "1234").unwrap() {
+        match restore_seed(&store, "1234", 0).unwrap() {
             RestoreOutcome::Already(id) => {
-                let (id2, _) = load_or_create_identity(&store, None).unwrap();
+                let (id2, _) = load_or_create_identity(&store, None, 0).unwrap();
                 assert_eq!(id, id2.node_id);
             }
             other => panic!("expected Already, got {other:?}"),
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn restore_into_empty_store_imports_and_restores_node_id() {
         let (d1, store1) = store_with_identity();
-        let (id1, _) = load_or_create_identity(&store1, None).unwrap();
+        let (id1, _) = load_or_create_identity(&store1, None, 0).unwrap();
         backup_seed(&store1, "1234", None).unwrap();
         // Копируем vault рядом с новым (пустым) стором.
         let d2 = tempdir().unwrap();
@@ -250,12 +250,12 @@ mod tests {
         let vault_dst = seed_vault_path(&store2);
         std::fs::copy(&vault_src, &vault_dst).unwrap();
         let _ = d1; // держим tempdir живым
-        match restore_seed(&store2, "1234").unwrap() {
+        match restore_seed(&store2, "1234", 0).unwrap() {
             RestoreOutcome::Imported(id) => assert_eq!(id, id1.node_id),
             other => panic!("expected Imported, got {other:?}"),
         }
         // И load_or_create на новом сторе видит ту же идентичность.
-        let (id2, created) = load_or_create_identity(&store2, None).unwrap();
+        let (id2, created) = load_or_create_identity(&store2, None, 0).unwrap();
         assert!(created.is_none());
         assert_eq!(id2.node_id, id1.node_id);
     }
@@ -264,9 +264,9 @@ mod tests {
     fn restore_wrong_pin_and_duress() {
         let (_d, store) = store_with_identity();
         backup_seed(&store, "1234", Some("9999")).unwrap();
-        assert!(matches!(restore_seed(&store, "0000").unwrap(), RestoreOutcome::WrongPin));
+        assert!(matches!(restore_seed(&store, "0000", 0).unwrap(), RestoreOutcome::WrongPin));
         // Duress: реальный сид НЕ импортируется — стор не тронут.
-        assert!(matches!(restore_seed(&store, "9999").unwrap(), RestoreOutcome::Duress));
+        assert!(matches!(restore_seed(&store, "9999", 0).unwrap(), RestoreOutcome::Duress));
     }
 
     #[test]
@@ -298,7 +298,7 @@ mod tests {
         );
         // Успешный unlock...
         assert!(matches!(
-            restore_seed(&store, "1234").unwrap(),
+            restore_seed(&store, "1234", 0).unwrap(),
             RestoreOutcome::Already(_)
         ));
         // ...и vault на диске уже на 600k, повторное открытие работает.
@@ -307,7 +307,7 @@ mod tests {
             PBKDF2_ROUNDS
         );
         assert!(matches!(
-            restore_seed(&store, "1234").unwrap(),
+            restore_seed(&store, "1234", 0).unwrap(),
             RestoreOutcome::Already(_)
         ));
     }

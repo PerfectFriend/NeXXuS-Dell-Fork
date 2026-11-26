@@ -77,6 +77,9 @@ pub struct EpochInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeStatus {
     pub node_id: String,
+    /// ADR-0011: индекс хоста в пуле владельца (m/44'/999'/0'/0/<host_index>).
+    #[serde(default)]
+    pub host_index: u32,
     pub version: String,
     pub listen_addr: String,
     pub bound_addr: Option<String>,
@@ -195,6 +198,8 @@ pub struct LocalApi {
     duress_wipe: std::sync::atomic::AtomicBool,
     /// API-01: семафор на число одновременных WebSocket соединений.
     ws_conns: std::sync::Arc<tokio::sync::Semaphore>,
+    /// ADR-0011: индекс хоста в пуле (для деривации node_id при импорте).
+    host_index: u32,
     /// BS-01: опциональный pin ожидаемого registry_pub (hex) для bootstrap-списков.
     /// Если задан — envelope с другим registry_pub отклоняется (trust-on-first-use закрыт).
     bootstrap_registry_pin: std::sync::Mutex<Option<String>>,
@@ -306,6 +311,7 @@ impl LocalApi {
             smp_inbox_tx,
             smp_inbox_rx: Arc::new(Mutex::new(Some(smp_inbox_rx))),
             api_token: std::sync::Mutex::new(None),
+            host_index: crate::node_config::host_index(&crate::node_config::load_file()),
             discovery: std::sync::Mutex::new(None),
             panic: Arc::new(std::sync::Mutex::new(
                 crate::panic::PanicManager::load(panic_path)
@@ -637,7 +643,7 @@ impl LocalApi {
             .and_then(|p| p.get("mnemonic"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| NexxusError::Vault("param 'mnemonic' required".into()))?;
-        let (node_id, status) = import_mnemonic(&self.store, phrase)?;
+        let (node_id, status) = import_mnemonic(&self.store, phrase, self.host_index)?;
         Ok(serde_json::json!({
             "status": status,
             "node_id": hex::encode(node_id.0),
@@ -688,7 +694,7 @@ impl LocalApi {
             .and_then(|v| v.as_str())
             .ok_or_else(|| NexxusError::Vault("param 'pin' required".into()))?;
         use crate::seed_vault::RestoreOutcome;
-        let r = match crate::seed_vault::restore_seed(&self.store, pin)? {
+        let r = match crate::seed_vault::restore_seed(&self.store, pin, self.host_index)? {
             RestoreOutcome::Imported(id) => serde_json::json!({"status": "imported", "node_id": hex::encode(id.0)}),
             RestoreOutcome::Already(id) => serde_json::json!({"status": "already", "node_id": hex::encode(id.0)}),
             RestoreOutcome::Duress => serde_json::json!({"status": "duress"}),
@@ -972,6 +978,7 @@ impl LocalApi {
         let tor = self.tor_status.lock().await.clone();
         serde_json::to_value(NodeStatus {
             node_id: hex::encode(self.network.node_id().0),
+            host_index: self.host_index,
             version: env!("CARGO_PKG_VERSION").into(),
             listen_addr: self.network.listen_addr_str().to_string(),
             bound_addr: bound.map(|a| a.to_string()),

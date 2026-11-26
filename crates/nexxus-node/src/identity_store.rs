@@ -69,9 +69,13 @@ fn wipe_plaintext_mnemonic(store: &ChunkStore) -> Result<(), NexxusError> {
 ///     (первый запуск без настройки), мнемоника печатается ровно один раз.
 ///
 /// `vault_pin`: из `NEXXUS_SEED_PIN` или systemd-credential (`seed.pin`).
+/// `host_index` (ADR-0011): индекс физического хоста в пуле владельца;
+/// ключ деривируется по m/44'/999'/0'/0/<host_index> — у каждого хоста
+/// свой node_id при общем cluster_tag. 0 = прежнее поведение.
 pub fn load_or_create_identity(
     store: &ChunkStore,
     vault_pin: Option<&str>,
+    host_index: u32,
 ) -> Result<(NodeIdentity, Option<Zeroizing<String>>), NexxusError> {
     let meta = meta_mnemonic(store)?;
     let vault_exists = crate::seed_vault::seed_vault_path(store).exists();
@@ -92,7 +96,7 @@ pub fn load_or_create_identity(
                 wipe_plaintext_mnemonic(store)?;
                 store.delete_meta(META_MNEMONIC_MIGRATED)?;
                 eprintln!("nexxusd: S4 phase 2 — plaintext mnemonic wiped from meta; seed теперь только в vault");
-                return Ok((derive_identity(&seed), None));
+                return Ok((derive_identity(&seed, host_index), None));
             }
             eprintln!("nexxusd: warn — vault есть, но PIN не задан (NEXXUS_SEED_PIN/credential): plaintext mnemonic в meta НЕ затёрт");
         } else if !vault_exists {
@@ -109,7 +113,7 @@ pub fn load_or_create_identity(
                 eprintln!("nexxusd: warn — PIN не задан, vault не создан: мнемоника остаётся в plaintext meta (S4 phase 1 pending)");
             }
         }
-        return Ok((derive_identity(&seed), None));
+        return Ok((derive_identity(&seed, host_index), None));
     }
 
     if vault_exists {
@@ -120,7 +124,7 @@ pub fn load_or_create_identity(
         })?;
         let phrase = crate::seed_vault::load_seed_from_vault(store, pin)?;
         let seed = IdentitySeed::validate(&phrase)?;
-        return Ok((derive_identity(&seed), None));
+        return Ok((derive_identity(&seed, host_index), None));
     }
 
     // Fresh identity.
@@ -131,7 +135,7 @@ pub fn load_or_create_identity(
     } else {
         store.put_meta(META_IDENTITY_MNEMONIC, phrase.as_bytes())?;
     }
-    Ok((derive_identity(&seed), Some(phrase)))
+    Ok((derive_identity(&seed, host_index), Some(phrase)))
 }
 
 /// Initialize (or verify) the identity, optionally from a given mnemonic.
@@ -140,6 +144,7 @@ pub fn init_identity(
     store: &ChunkStore,
     mnemonic: Option<&str>,
     vault_pin: Option<&str>,
+    host_index: u32,
 ) -> Result<(NodeIdentity, Option<Zeroizing<String>>), NexxusError> {
     match mnemonic {
         Some(phrase) => {
@@ -150,7 +155,7 @@ pub fn init_identity(
                         "store already initialized with a different mnemonic".into(),
                     ));
                 }
-                return Ok((derive_identity(&seed), None));
+                return Ok((derive_identity(&seed, host_index), None));
             }
             // S4: новый init с PIN пишет только vault, без plaintext meta.
             if let Some(pin) = vault_pin {
@@ -158,9 +163,9 @@ pub fn init_identity(
             } else {
                 store.put_meta(META_IDENTITY_MNEMONIC, phrase.as_bytes())?;
             }
-            Ok((derive_identity(&seed), None))
+            Ok((derive_identity(&seed, host_index), None))
         }
-        None => load_or_create_identity(store, vault_pin),
+        None => load_or_create_identity(store, vault_pin, host_index),
     }
 }
 
@@ -208,7 +213,7 @@ pub fn identity_status(store: &ChunkStore) -> Result<(bool, Option<usize>), Nexx
 /// the store encryption key is derived from this seed, so swapping the
 /// identity on a live store would make all chunks undecryptable.
 /// Returns (node_id, status): "imported" | "already".
-pub fn import_mnemonic(store: &ChunkStore, phrase: &str) -> Result<(NodeId, &'static str), NexxusError> {
+pub fn import_mnemonic(store: &ChunkStore, phrase: &str, host_index: u32) -> Result<(NodeId, &'static str), NexxusError> {
     let seed = IdentitySeed::validate(phrase)?;
     if let Some(existing_phrase) = meta_mnemonic(store)? {
         // VLT-01: plaintext copy of the stored mnemonic is zeroized on drop.
@@ -218,14 +223,15 @@ pub fn import_mnemonic(store: &ChunkStore, phrase: &str) -> Result<(NodeId, &'st
                 "store already initialized with a different mnemonic".into(),
             ));
         }
-        return Ok((derive_identity(&seed).node_id, "already"));
+        return Ok((derive_identity(&seed, host_index).node_id, "already"));
     }
     store.put_meta(META_IDENTITY_MNEMONIC, seed.mnemonic.as_bytes())?;
-    Ok((derive_identity(&seed).node_id, "imported"))
+    Ok((derive_identity(&seed, host_index).node_id, "imported"))
 }
 
-fn derive_identity(seed: &IdentitySeed) -> NodeIdentity {
-    let derived = DerivedKey::from_seed(seed.seed_bytes()).expect("SLIP-0010 derivation");
+fn derive_identity(seed: &IdentitySeed, host_index: u32) -> NodeIdentity {
+    let derived = DerivedKey::from_seed_host(seed.seed_bytes(), host_index)
+        .expect("SLIP-0010 derivation");
     let identity = Identity::from_secret(&derived.private_key).expect("ed25519 from secret");
     let node_id = identity.node_id();
     let x25519_secret = x25519_secret_from_seed(seed.seed_bytes());
@@ -248,12 +254,12 @@ mod tests {
         let path = dir.path().join("store.redb");
         let (id1, created1) = {
             let store = ChunkStore::open(&path).unwrap();
-            load_or_create_identity(&store, None).unwrap()
+            load_or_create_identity(&store, None, 0).unwrap()
         };
         assert!(created1.is_some(), "first open must create the identity");
         let (id2, created2) = {
             let store = ChunkStore::open(&path).unwrap();
-            load_or_create_identity(&store, None).unwrap()
+            load_or_create_identity(&store, None, 0).unwrap()
         };
         assert!(created2.is_none(), "second open must reuse the identity");
         assert_eq!(id1.node_id, id2.node_id);
@@ -267,8 +273,8 @@ mod tests {
         let d2 = tempdir().unwrap();
         let s1 = ChunkStore::open(d1.path().join("a.redb")).unwrap();
         let s2 = ChunkStore::open(d2.path().join("b.redb")).unwrap();
-        let (i1, _) = load_or_create_identity(&s1, None).unwrap();
-        let (i2, _) = load_or_create_identity(&s2, None).unwrap();
+        let (i1, _) = load_or_create_identity(&s1, None, 0).unwrap();
+        let (i2, _) = load_or_create_identity(&s2, None, 0).unwrap();
         assert_ne!(i1.node_id, i2.node_id);
     }
 
@@ -276,7 +282,7 @@ mod tests {
     fn node_id_is_sha256_of_pubkey() {
         let dir = tempdir().unwrap();
         let store = ChunkStore::open(dir.path().join("s.redb")).unwrap();
-        let (id, _) = load_or_create_identity(&store, None).unwrap();
+        let (id, _) = load_or_create_identity(&store, None, 0).unwrap();
         assert_eq!(id.node_id, id.identity.node_id());
     }
 
@@ -286,14 +292,14 @@ mod tests {
         let path = dir.path().join("store.redb");
         let phrase = {
             let store = ChunkStore::open(&path).unwrap();
-            let (_, _created) = load_or_create_identity(&store, None).unwrap();
+            let (_, _created) = load_or_create_identity(&store, None, 0).unwrap();
             let stored = store.get_meta(META_IDENTITY_MNEMONIC).unwrap();
             assert!(stored.is_some());
             String::from_utf8(stored.unwrap()).unwrap()
         };
         assert_eq!(Some(phrase.as_str()), {
             let store = ChunkStore::open(&path).unwrap();
-            let (_, created) = load_or_create_identity(&store, None).unwrap();
+            let (_, created) = load_or_create_identity(&store, None, 0).unwrap();
             assert!(created.is_none());
             store
                 .get_meta(META_IDENTITY_MNEMONIC)
@@ -312,7 +318,7 @@ mod tests {
         // Пустой стор: идентичности нет.
         assert_eq!(identity_status(&store).unwrap(), (false, None));
         assert!(read_mnemonic(&store, None).unwrap().is_none());
-        let (_, created) = load_or_create_identity(&store, None).unwrap();
+        let (_, created) = load_or_create_identity(&store, None, 0).unwrap();
         let phrase = created.unwrap();
         assert_eq!(
             read_mnemonic(&store, None).unwrap().as_ref().map(|z| z.as_str()),
@@ -327,14 +333,14 @@ mod tests {
         let path = dir.path().join("store.redb");
         let store = ChunkStore::open(&path).unwrap();
         let seed = IdentitySeed::generate().unwrap();
-        let (node_id, status) = import_mnemonic(&store, &seed.mnemonic).unwrap();
+        let (node_id, status) = import_mnemonic(&store, &seed.mnemonic, 0).unwrap();
         assert_eq!(status, "imported");
         // Тот же сид поверх — "already", тот же node_id.
-        let (node_id2, status2) = import_mnemonic(&store, &seed.mnemonic).unwrap();
+        let (node_id2, status2) = import_mnemonic(&store, &seed.mnemonic, 0).unwrap();
         assert_eq!(status2, "already");
         assert_eq!(node_id, node_id2);
         // И node_id совпадает с load_or_create.
-        let (id, created) = load_or_create_identity(&store, None).unwrap();
+        let (id, created) = load_or_create_identity(&store, None, 0).unwrap();
         assert!(created.is_none());
         assert_eq!(id.node_id, node_id);
     }
@@ -344,9 +350,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("store.redb");
         let store = ChunkStore::open(&path).unwrap();
-        let _ = load_or_create_identity(&store, None).unwrap();
+        let _ = load_or_create_identity(&store, None, 0).unwrap();
         let other = IdentitySeed::generate().unwrap();
-        let err = import_mnemonic(&store, &other.mnemonic).unwrap_err();
+        let err = import_mnemonic(&store, &other.mnemonic, 0).unwrap_err();
         assert!(err.to_string().contains("different mnemonic"));
     }
 
@@ -354,7 +360,7 @@ mod tests {
     fn import_mnemonic_rejects_invalid_bip39() {
         let dir = tempdir().unwrap();
         let store = ChunkStore::open(dir.path().join("s.redb")).unwrap();
-        let err = import_mnemonic(&store, "not a valid phrase at all really no").unwrap_err();
+        let err = import_mnemonic(&store, "not a valid phrase at all really no", 0).unwrap_err();
         assert!(!err.to_string().is_empty());
     }
 
@@ -366,12 +372,12 @@ mod tests {
         let path = dir.path().join("s.redb");
         let store = ChunkStore::open(&path).unwrap();
         // первый старт без PIN — legacy meta
-        let (id1, fresh) = load_or_create_identity(&store, None).unwrap();
+        let (id1, fresh) = load_or_create_identity(&store, None, 0).unwrap();
         assert!(fresh.is_some());
         assert!(store.get_meta(META_IDENTITY_MNEMONIC).unwrap().is_some());
         assert!(!crate::seed_vault::seed_vault_path(&store).exists());
         // phase 1: старт с PIN — vault создаётся, meta остаётся
-        let (id2, _) = load_or_create_identity(&store, Some("1234")).unwrap();
+        let (id2, _) = load_or_create_identity(&store, Some("1234"), 0).unwrap();
         assert_eq!(id1.node_id, id2.node_id);
         assert!(crate::seed_vault::seed_vault_path(&store).exists(), "vault должен создаться");
         assert!(store.get_meta(META_MNEMONIC_MIGRATED).unwrap().is_some(), "маркер phase 1");
@@ -383,22 +389,22 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("s.redb");
         let store = ChunkStore::open(&path).unwrap();
-        let (id1, _) = load_or_create_identity(&store, Some("1234")).unwrap();
-        let _ = load_or_create_identity(&store, Some("1234")).unwrap(); // phase 1 (fresh+pin → vault сразу, marker?)
+        let (id1, _) = load_or_create_identity(&store, Some("1234"), 0).unwrap();
+        let _ = load_or_create_identity(&store, Some("1234"), 0).unwrap(); // phase 1 (fresh+pin → vault сразу, marker?)
         // для fresh+pin marker не ставится — эмулируем legacy: пишем meta вручную
         // проще: fresh без pin → meta; потом два старта с pin
         let dir2 = tempdir().unwrap();
         let path2 = dir2.path().join("s.redb");
         let store2 = ChunkStore::open(&path2).unwrap();
-        let (ida, _) = load_or_create_identity(&store2, None).unwrap();
-        let _ = load_or_create_identity(&store2, Some("1234")).unwrap(); // phase 1
+        let (ida, _) = load_or_create_identity(&store2, None, 0).unwrap();
+        let _ = load_or_create_identity(&store2, Some("1234"), 0).unwrap(); // phase 1
         assert!(store2.get_meta(META_IDENTITY_MNEMONIC).unwrap().is_some());
-        let (idb, _) = load_or_create_identity(&store2, Some("1234")).unwrap(); // phase 2
+        let (idb, _) = load_or_create_identity(&store2, Some("1234"), 0).unwrap(); // phase 2
         assert_eq!(ida.node_id, idb.node_id);
         assert!(store2.get_meta(META_IDENTITY_MNEMONIC).unwrap().is_none(), "phase 2 затирает meta");
         // boot только из vault: неверный PIN → Err; верный → Ok
-        assert!(load_or_create_identity(&store2, Some("9999")).is_err(), "неверный PIN не открывает vault");
-        let (idc, _) = load_or_create_identity(&store2, Some("1234")).unwrap();
+        assert!(load_or_create_identity(&store2, Some("9999"), 0).is_err(), "неверный PIN не открывает vault");
+        let (idc, _) = load_or_create_identity(&store2, Some("1234"), 0).unwrap();
         assert_eq!(ida.node_id, idc.node_id, "vault-boot даёт ту же идентичность");
         let _ = id1;
     }
@@ -408,13 +414,28 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("s.redb");
         let store = ChunkStore::open(&path).unwrap();
-        let (_, fresh) = load_or_create_identity(&store, Some("4321")).unwrap();
+        let (_, fresh) = load_or_create_identity(&store, Some("4321"), 0).unwrap();
         assert!(fresh.is_some());
         assert!(store.get_meta(META_IDENTITY_MNEMONIC).unwrap().is_none(), "plaintext meta не пишется при наличии PIN");
         assert!(crate::seed_vault::seed_vault_path(&store).exists());
         // и читается обратно по PIN
         let m = read_mnemonic(&store, Some("4321")).unwrap().unwrap();
         assert_eq!(m.as_str(), fresh.unwrap().as_str());
+    }
+
+    #[test]
+    fn same_mnemonic_different_host_index_gives_distinct_ids_same_cluster() {
+        // ADR-0011: пул одного владельца — один BIP-39 на все хосты, но у
+        // каждого хоста свой ключ (m/44'/999'/0'/0/<host_index>), а
+        // cluster_tag общий: он считается от мастер-seed и от host_index не зависит.
+        let seed = IdentitySeed::generate().unwrap();
+        let id0 = derive_identity(&seed, 0);
+        let id1 = derive_identity(&seed, 1);
+        assert_ne!(id0.node_id, id1.node_id, "хосты пула должны иметь разные node_id");
+        assert_eq!(
+            crate::net::discovery::cluster_tag_from_seed(seed.seed_bytes()),
+            crate::net::discovery::cluster_tag_from_seed(seed.seed_bytes()),
+        );
     }
 
 }

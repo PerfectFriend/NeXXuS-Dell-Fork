@@ -17,11 +17,15 @@ NeXXuS-Node-Hermes-Rust не трогаем — совместимость с ч
 ## Решение
 
 ### 1. Identity и «владелец» (BIP39)
-- Ключ ноды — **SLIP-10 derived key** от seed хранилища (в core уже есть
-  `keys::slip10::DerivedKey::from_seed`), путь `m/44'/77777'/<account>'/<host_index>'`.
-  Один mnemonic = один владелец; у каждого хоста в кластере свой deterministic node key.
-- `cluster_tag = HMAC-SHA256(seed, "nexxus/cluster/v1")[0..16]` — keyed-хеш, не раскрывает
-  seed, но позволяет отличить «своих» от «чужих». Передаётся в beacon/announce.
+- Ключ ноды — **SLIP-10 derived key** от seed хранилища: путь
+  `m/44'/999'/0'/0/<host_index>` (`keys::slip10::DerivedKey::from_seed_host`;
+  `from_seed` = `host_index 0`, обратно совместимо).
+  `host_index` — из `host_index=` в node.conf или `NEXXUS_HOST_INDEX`
+  (дефолт 0). Один mnemonic = один владелец; у каждого хоста в пуле свой
+  deterministic node key → разные node_id при общем cluster_tag.
+- `cluster_tag = HMAC-SHA256(seed, "nexxus/cluster/v1")[0..16]` — keyed-хеш от
+  **мастер-seed** (не от host-пути), не раскрывает seed, но позволяет отличить
+  «своих» от «чужих». Передаётся в beacon/announce.
 - **Политика авто-приёма:** на LAN/Tailscale авто-коннект только к peer с **тем же
   cluster_tag**. Чужой cluster — только по invite (п.4). На Tor — всегда только invite.
 

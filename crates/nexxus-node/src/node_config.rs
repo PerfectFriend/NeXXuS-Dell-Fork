@@ -54,6 +54,16 @@ pub fn cfg_or_env(conf: &HashMap<String, String>, conf_key: &str, env_key: &str,
     conf.get(conf_key).cloned().unwrap_or_else(|| default.to_string())
 }
 
+/// ADR-0011: индекс физического хоста в пуле владельца (один BIP-39 на пул).
+/// Ключ ноды деривируется по m/44'/999'/0'/0/<host_index>; cluster_tag общий
+/// для всего пула. `host_index` в node.conf или `NEXXUS_HOST_INDEX`; дефолт 0
+/// (совместимость с существующими сторами).
+pub fn host_index(conf: &HashMap<String, String>) -> u32 {
+    cfg_or_env(conf, "host_index", "NEXXUS_HOST_INDEX", "0")
+        .parse()
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

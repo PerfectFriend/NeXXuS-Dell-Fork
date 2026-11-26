@@ -388,7 +388,7 @@ mod tests {
     fn store_with_data() -> (tempfile::TempDir, ChunkStore) {
         let dir = tempdir().unwrap();
         let store = ChunkStore::open(dir.path().join("store.redb")).unwrap();
-        let _ = load_or_create_identity(&store, None).unwrap();
+        let _ = load_or_create_identity(&store, None, 0).unwrap();
         store.put_chunk(&h(b"hello"), b"hello").unwrap();
         store.put_chunk(&h(b"world"), b"world").unwrap();
         (dir, store)
@@ -488,7 +488,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("store.redb");
         let store = ChunkStore::open(&path).unwrap();
-        let _ = load_or_create_identity(&store, None).unwrap();
+        let _ = load_or_create_identity(&store, None, 0).unwrap();
         store.put_chunk(&h(b"v1"), b"v1").unwrap();
         drop(store);
         let m = backup_store(&ChunkStore::open(&path).unwrap()).unwrap();
