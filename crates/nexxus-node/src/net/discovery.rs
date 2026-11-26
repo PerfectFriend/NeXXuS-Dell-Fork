@@ -343,9 +343,33 @@ pub struct TailscalePeer {
     pub ips: Vec<Ipv4Addr>,
 }
 
+/// Путь к CLI tailscale: в systemd-юнитах PATH минимальный и не содержит
+/// /snap/bin, поэтому проверяем известные места явно (snap/apt/локальный).
+pub fn tailscale_cli() -> Option<String> {
+    const CANDIDATES: [&str; 4] = [
+        "tailscale",
+        "/snap/bin/tailscale",
+        "/usr/bin/tailscale",
+        "/usr/local/bin/tailscale",
+    ];
+    for c in CANDIDATES {
+        if c.contains('/') {
+            if std::path::Path::new(c).exists() {
+                return Some(c.to_string());
+            }
+        } else if let Ok(out) = std::process::Command::new(c).arg("version").output() {
+            if out.status.success() {
+                return Some(c.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Наш собственный tailnet-адрес (`tailscale ip -4`).
 pub fn tailscale_self_ip() -> Option<Ipv4Addr> {
-    let out = std::process::Command::new("tailscale").args(["ip", "-4"]).output().ok()?;
+    let cli = tailscale_cli()?;
+    let out = std::process::Command::new(cli).args(["ip", "-4"]).output().ok()?;
     let text = String::from_utf8(out.stdout).ok()?;
     text.lines()
         .map(str::trim)
@@ -355,7 +379,10 @@ pub fn tailscale_self_ip() -> Option<Ipv4Addr> {
 
 /// Пиры tailnet из `tailscale status --json`.
 pub fn tailscale_peers() -> Vec<TailscalePeer> {
-    let Ok(out) = std::process::Command::new("tailscale")
+    let Some(cli) = tailscale_cli() else {
+        return Vec::new();
+    };
+    let Ok(out) = std::process::Command::new(cli)
         .args(["status", "--json"])
         .output()
     else {

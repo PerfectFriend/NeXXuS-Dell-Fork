@@ -5,10 +5,10 @@ After=network-online.target
 Wants=network-online.target
 Requires=nexxus-smp.service
 After=nexxus-smp.service
-# Tailscale (если установлен) — нода стартует после сетевого агента,
-# чтобы tailnet-адрес уже был в системе к моменту дискавери.
-Wants=tailscale.service
-After=tailscale.service
+# Tailscale: жёсткой зависимости нет — установка бывает snap или apt, а имя
+# юнита отличается (tailscale.tailscaled.service vs tailscaled.service).
+# Дискавери сам опрашивает Tailscale каждые 30 с и подхватит адреса, когда
+# tailnet поднимется (ADR-0011).
 
 [Service]
 Type=simple
